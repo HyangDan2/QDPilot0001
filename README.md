@@ -12,7 +12,7 @@ HD2Lab Server-HQ의 **공유 월드 방치형 게임**입니다. 서버실을 �
 - **멱등 액션**: `opId`(8~64자 `[A-Za-z0-9_-]`)가 30일간 유일 키(`world_ops`)로 기록되어 재시도·중복 요청이 상태를 두 번 바꾸지 않습니다.
 - **연출 이벤트**: `install`·`upgrade`·`levelup`·`achievement`·`reboot`·`reset`을 `world_events`에 기록하고, 공개 클라이언트는 `?since=<cursor>`로 증분 조회해 설치 연출·레벨업 효과·로그를 재생합니다. 액터 이름은 공개 응답에 포함하지 않습니다.
 - **전환 이관**: 최초 기동 시 기존 `players` 테이블에서 누적 생산량이 가장 큰 행의 상태를 1회 이관합니다. `players`는 삭제하지 않고 보존합니다.
-- **공개 화면**: 의존성 없는 Canvas 2D 미니 엔진(`static/public/assets/engine.js`)이 서버실·설치 애니메이션·향단이 이동/전투를 그리고, `world.js`가 8초 폴링·이벤트 로그·드로워·메뉴를 담당합니다.
+- **공개 화면**: 의존성 없는 Canvas 2D 미니 엔진(`static/public/assets/engine/`)이 서버실·설치 애니메이션·향단이 이동/전투를 그리고, `world.js`가 8초 폴링·이벤트 로그·드로워·메뉴를 담당합니다. 스프라이트 시트가 없어도 [`sprites/manifest.json`](static/public/assets/sprites/manifest.json)의 단일 이미지 fallback으로 동작합니다.
 
 ## 성장 규칙 요약
 
@@ -35,8 +35,11 @@ server/backup.py    # 정합성 백업·검증·복구 CLI (python3 -m server.ba
 server/api.py       # 표준 라이브러리 HTTP API + 관리자/공개 정적 파일 서빙
 server/__main__.py  # UDS/TCP 실행 진입점 (--uds, --host/--port, --static-root, --public-root, --dev-user)
 static/             # Vanilla ES 모듈 관리자 콘솔 (index.html, assets/)
-static/public/      # 공개 월드 뷰 (index.html, assets/engine.js, world.js, sprites/)
-docs/               # DB_MIGRATION.md(백업·복구·스키마 버전), notes.md
+static/public/      # 공개 월드 뷰 (index.html, world.js)
+static/public/assets/engine/   # Canvas 2D 엔진 모듈 (config·animation·sprites·effects·room·motion·scene)
+static/public/assets/sprites/  # 스프라이트와 manifest.json (시트 미납품 시 단일 이미지 fallback)
+art/                # 웹 루트 밖 아트 원본(source)·반입 대기(export) — 서빙되지 않음
+docs/               # DB_MIGRATION.md, ART_DIRECTION.md, ASSET_REQUIREMENTS.md, notes.md
 tests/              # 119개 단위·통합 테스트 (UDS 포함)
 ```
 

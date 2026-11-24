@@ -1,0 +1,3 @@
+# Editing masters stay out of Git; verified PNG exports are the runtime source.
+*/source/*
+!*/source/.gitkeep

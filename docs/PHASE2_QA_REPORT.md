@@ -2,19 +2,22 @@
 
 - 대상: `feature/phase2-core-evolution` (base `main` `326709d`)
 - 작성일: 2026-11-25 (KST)
-- 결론: 자동 테스트 128개 통과, 2F 필수 매트릭스 전 항목 실행 완료. **Raspberry Pi·운영 서버 실측은
-  하지 않았으며, 성능 수치는 macOS 개발 호스트 측정값입니다.**
+- 결론: 자동 테스트 128개 통과(개발 호스트·Raspberry Pi 모두), 2F 필수 매트릭스 전 항목 실행 완료.
+  **운영 Nginx 경유·WAN 관전자·실기 디스플레이는 미실측이며**, Raspberry Pi는 1차 실측(서버 부하 +
+  headless 브라우저)만 수행했습니다.
 
 ## 1. 검증 환경
 
 | 항목 | 값 |
 | --- | --- |
 | 호스트 | macOS 15.7.9, Apple M1 (arm64) |
-| Python / SQLite | 3.13.2 / 3.45.3 |
-| 브라우저 | headless Chrome 158.0.8127.37 (CDP) |
+| Pi 호스트 | Raspberry Pi (hyogidevrsp), aarch64 4코어, 8GB, Debian 12, Python 3.11.2 |
+| Python / SQLite | 3.13.2 / 3.45.3 (Pi: 3.11.2 / 시스템 SQLite) |
+| 브라우저 | headless Chrome 158.0.8127.37 (CDP), Pi: Chromium 155 headless |
 | 기능 브랜치 서버 | `127.0.0.1:8123` (프리뷰 DB, `--dev-user`) |
-| QA 서버 | `127.0.0.1:8124` (임시 DB, 쓰기 경합/soak) |
+| QA 서버 | `127.0.0.1:8124` (임시 DB, 1시간 soak) |
 | 비교(before) 서버 | `127.0.0.1:8125` (main `326709d` worktree) |
+| Pi 임시 서버 | `127.0.0.1:18233` (Pi 클론 + 임시 DB, 측정 후 삭제) |
 | 네트워크 | 로컬 루프백. 샌드박스 HTTP 프록시는 하네스에서 우회 |
 
 ## 2. 자동 테스트
@@ -22,6 +25,11 @@
 ```text
 $ python3 -m unittest discover -s tests -t .
 Ran 128 tests in 8.559s
+
+OK
+
+# Raspberry Pi (hyogidevrsp, Python 3.11.2):
+Ran 128 tests in 19.704s
 
 OK
 ```
@@ -50,6 +58,7 @@ OK
 | UI | 320/390/768/1440/1920px | 5개 폭 스크린샷, FPS 60, 콘솔 오류 0, 가로 스크롤 0 | PASS |
 | UI | 장시간 실행 | 브라우저 47분 연속 실행, FPS/힙/오류 샘플링 | PASS (6장) |
 | 운영 | DB 마이그레이션·롤백 | `test_v1_database_upgrades_in_place…`(v1 스키마 실 DB), 신버전 거부, pre-deploy 복구 절차 | PASS (운영 미적용) |
+| 성능 | Pi 1차 재측정 | Pi 테스트 128 OK, 1/10/100명+soak 전부 200·lock 0, headless FPS 18~21 (6.3장) | PASS (서버) |
 
 ## 4. 엔진·브라우저 검증 상세 (CDP)
 
@@ -68,7 +77,7 @@ OK
 
 스크린샷(저장소): [`docs/images/phase2/`](images/phase2) — `qa-ui-{320-fixed,390,768,1440,1920}.jpg`,
 `qa-ui-reduced.jpg`, `qa-after-1440.jpg`, `qa-after-390.jpg`, `qa-before-1440.jpg`, `qa-before-390.jpg`,
-`qa-ui-soak-final.jpg`. 원본 PNG는 `/tmp`에 남아 있습니다(커밋 제외).
+`qa-ui-soak-final.jpg`, `pi-headless-1440.jpg`. 원본 PNG는 `/tmp`에 남아 있습니다(커밋 제외).
 
 ## 5. UI 매트릭스
 
@@ -99,6 +108,17 @@ Reduced Motion 결과: [qa-ui-reduced.jpg](images/phase2/qa-ui-reduced.jpg) (버
   콘솔 오류 0 · 월드 레벨 1→2 정상 진행 · 가로 스크롤 없음 —
   [qa-ui-soak-final.jpg](images/phase2/qa-ui-soak-final.jpg)
 
+### 6.3 Raspberry Pi 1차 (2026-11-25)
+
+- 서버: Pi 클론(`bd63a75`) + 임시 DB, 포트 18233. 1/10/100명 180초 + 100명 300초(8s) + 2명 900초 soak
+  → **전 구간 23,896/23,896 HTTP 200, 계약 위반 0, lock 0**, RSS 29.6MB(peak 31.1MB).
+  100명 구간 CPU idle 88~90%.
+- 브라우저: Pi Chromium 155 headless 1440×900 — FPS 18~21(중앙 19), 콘솔 오류 0, 가로 스크롤 0 —
+  [pi-headless-1440.jpg](images/phase2/pi-headless-1440.jpg). GPU 플래그(`--use-gl=egl`) 재시도도 동일.
+- 해석·한계: 서버는 Pi에서도 100명·1초를 무리 없이 처리. headless Chromium ~20 FPS는 GPU 없는
+  소프트웨어 렌더링 특성으로 보이며 실기 디스플레이 키오스크 성능은 미검증입니다. 임시 인스턴스·클론·
+  DB는 측정 후 삭제했습니다. 상세: [PERFORMANCE_REPORT.md](PERFORMANCE_REPORT.md) 10장.
+
 ## 7. 성능 요약
 
 개발용 탭을 모두 닫은 상태에서 최종 재측정한 값입니다(M1 호스트, 로컬 루프백).
@@ -112,6 +132,9 @@ Reduced Motion 결과: [qa-ui-reduced.jpg](images/phase2/qa-ui-reduced.jpg) (버
 | 공개 관전 100명 (main `326709d`) | 2.88ms | 48.54ms | **2,059.25ms** | **7,826.10ms** | 2,783/2,800, **타임아웃 17** |
 | 동시 구매 10×5 | 2.92ms | 29.31ms | 85.75ms | 116.57ms | 50/50 200, lock 0 |
 | 관리자 동시 조회 20×10 | 2.93ms | 31.61ms | 80.27ms | 126.93ms | 200/200 200, lock 0 |
+| **Pi** 공개 100명·1s | 2.65ms | 20.69ms | 39.65ms | 161.52ms | 17900/17900 200, lock 0 |
+| **Pi** 공개 100명·8s | 2.37ms | 14.10ms | 68.35ms | 81.61ms | 3800/3800 200, lock 0 |
+| **Pi** soak 2명·8s (15분) | 3.03ms | 5.28ms | 12.33ms | 12.73ms | 226/226 200, lock 0 |
 
 계약 위반 0, SQLite lock 오류 0. 상세·방법·한계는 [`PERFORMANCE_REPORT.md`](PERFORMANCE_REPORT.md).
 
@@ -127,8 +150,10 @@ Reduced Motion 결과: [qa-ui-reduced.jpg](images/phase2/qa-ui-reduced.jpg) (버
 
 ## 9. 미실행·한계
 
-- **Raspberry Pi 및 운영 서버 실측 없음**: 부하·FPS·메모리 수치는 M1 개발 호스트 기준입니다.
+- **운영 서버(Nginx 경유) 및 실기 디스플레이 미실측**: Pi 1차는 임시 인스턴스(루프백)와 headless
+  Chromium뿐입니다. GPU 있는 실기 브라우저 FPS는 확인하지 않았습니다.
 - 실제 다중 네트워크 클라이언트가 아닌 한 호스트의 멀티프로세스 관전자입니다. WAN 지연·프록시는 미측정.
+  Pi 측정도 하네스 클라이언트가 서버와 같은 4코어를 공유했습니다.
 - 모바일 실기기(Safari/Firefox) 미검증. Chrome 에뮬레이션(DPR 1)만 확인했습니다.
 - 카메라 줌/팬, 쿨링 시각화는 구현 전이라 검증 대상이 아닙니다.
 - 운영 DB 마이그레이션은 실행하지 않았습니다(배포 금지). 로컬 복제 DB와 테스트로만 검증했습니다.
@@ -151,4 +176,11 @@ python3 tools/qa_perf.py adminread --base http://127.0.0.1:8123 --workers 20 --o
 # 1시간 soak
 python3 tools/qa_perf.py public --base http://127.0.0.1:8124 --viewers 2 --seconds 3600 --interval 8 \
   --rss-pid <server-pid> --out /tmp/soak-public-1h.json
+
+# Raspberry Pi 1차 재측정 (운영 서비스와 분리된 임시 인스턴스, 측정 후 삭제)
+git clone -b feature/phase2-core-evolution https://github.com/HyangDan2/QDPilot0001.git /tmp/p2qa
+cd /tmp/p2qa && python3 -m unittest discover -s tests -t .
+python3 -m server --host 127.0.0.1 --port 18233 --db /tmp/p2qa-perf.sqlite3 \
+  --dev-user piqa --dev-role admiral --static-root static --public-root static/public &
+python3 tools/qa_perf.py public --base http://127.0.0.1:18233 --viewers 100 --seconds 180 --interval 1
 ```

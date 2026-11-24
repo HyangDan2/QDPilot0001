@@ -134,8 +134,9 @@ headless Chrome 158, CDP로 측정했습니다.
 
 ## 9. 한계와 운영 전 확인
 
-1. 모든 수치는 M1 개발 호스트 값입니다. **Pi(ARM, 저전력)에서는 CPU·메모리·p95가 더 높을 수 있습니다.**
-2. 운영 반영 전 Pi에서 아래를 재측정하십시오.
+1. 2~6장 수치는 M1 개발 호스트 값입니다. **Pi 1차 실측은 10장에 분리해 기록**했으며(서버 부하는 Pi에서도
+   통과, 브라우저는 headless만), 운영 Nginx 경유·WAN 관전자·실기 디스플레이는 여전히 미측정입니다.
+2. Pi 운영 반영 전 아래를 재측정하십시오(10장에서 동일 명령을 1차 실행 완료).
    ```bash
    python3 tools/qa_perf.py public --base http://127.0.0.1:8124 --viewers 1  --seconds 300 --interval 1
    python3 tools/qa_perf.py public --base http://127.0.0.1:8124 --viewers 10 --seconds 300 --interval 1
@@ -144,4 +145,30 @@ headless Chrome 158, CDP로 측정했습니다.
      --rss-pid <pid> --out soak.json
    ```
 3. 실제 다중 네트워크(WAN) 지연, Nginx 경유 비용, 모바일 Safari 성능은 이번 측정 범위가 아닙니다.
-4. 브라우저 FPS는 headless Chrome 기준입니다. 실기기 GPU·발열 상태에 따라 달라질 수 있습니다.
+4. 브라우저 FPS는 headless Chrome/Chromium 기준입니다. 실기기 GPU·발열 상태에 따라 달라질 수 있습니다.
+
+## 10. Raspberry Pi 1차 실측 (2026-11-25)
+
+- 호스트: `hyogidevrsp` (Raspberry Pi, aarch64, 4 cores, 8GB, Debian 12 bookworm, Python 3.11.2).
+  상시 운영 중인 Pi에서 **임시 인스턴스**로만 측정했고 운영 서비스 포트·DB는 건드리지 않았습니다.
+- 소스: GitHub `feature/phase2-core-evolution` `bd63a75` 클론, 임시 DB, `127.0.0.1:18233`, 루프백.
+- 자동 테스트: **128개 OK (19.7초)** — Pi의 Python 3.11에서도 동일하게 통과.
+
+| 시나리오 | 시간 | 요청 | HTTP | p50 | p95 | p99 | max |
+| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| 공개 1명·1s | 180s | 180 | 200×180 | 2.33ms | 3.06ms | 4.18ms | 5.90ms |
+| 공개 10명·1s | 180s | 1,790 | 200×1790 | 3.98ms | 15.23ms | 90.31ms | 100.56ms |
+| 공개 100명·1s | 180s | 17,900 | 200×17900 | 2.65ms | 20.69ms | 39.65ms | 161.52ms |
+| 공개 100명·8s | 300s | 3,800 | 200×3800 | 2.37ms | 14.10ms | 68.35ms | 81.61ms |
+| soak 2명·8s | 900s | 226 | 200×226 | 3.03ms | 5.28ms | 12.33ms | 12.73ms |
+
+- 계약 위반 0, SQLite lock 오류 0. 서버 메모리 `VmRSS` 29.6MB, 시리즈 후 peak `VmHWM` 31.1MB.
+- 100명 구간 top 5초 샘플에서 CPU idle 88~90%(load average 1.4~1.75 / 4 cores)로 여유가 있었습니다.
+- 브라우저: Pi의 Chromium 155 headless, 1440×900, `?fps=1`, 5초×24샘플 — **FPS 18~21(중앙 19)**.
+  `--disable-gpu` 제거 + `--use-gl=egl` 재시도도 19~21로 동일했습니다. 콘솔 오류 0, 매니페스트 v2,
+  가로 스크롤 0 — [pi-headless-1440.jpg](images/phase2/pi-headless-1440.jpg)
+- 해석: 서버 경로는 Pi에서도 100명·1초를 여유 있게 처리합니다. headless Chromium의 ~20 FPS는 GPU 없는
+  headless 소프트웨어 렌더링 특성으로 보이며, **실기 디스플레이 키오스크 성능은 별도 확인이 필요**합니다.
+  공개 관전자는 외부 기기 브라우저로 접속하므로 이 수치가 서버 배포를 막는 요소는 아닙니다.
+- 한계: 하네스 클라이언트가 서버와 같은 4코어를 공유했고, Pi 외부(WAN) 관전자·Nginx 경유는 미측정입니다.
+- 측정 후 임시 인스턴스·클론·venv·임시 DB는 모두 삭제했습니다(`/tmp/p2qa*`, 포트 18233 종료 확인).

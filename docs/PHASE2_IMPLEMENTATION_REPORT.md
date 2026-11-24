@@ -27,7 +27,10 @@
 ## 2. 환경
 
 - Python 3.13.2(표준 라이브러리만), SQLite 3.45.3(WAL), Vanilla ES 모듈 + Canvas 2D
-- 로컬 검증 호스트: macOS 15.7.9(Apple M1, arm64) 개발 머신. **Raspberry Pi 및 운영 서버 실측은 하지 않았습니다.**
+- 로컬 검증 호스트: macOS 15.7.9(Apple M1, arm64) 개발 머신
+- Raspberry Pi 1차 실측(2026-11-25): `hyogidevrsp`(aarch64 4코어, Debian 12, Python 3.11.2)에 브랜치를
+  임시 클론해 128개 테스트 OK, 공개 1/10/100명·soak 전 구간 HTTP 200·lock 0, headless Chromium FPS
+  18~21을 확인했습니다(운영 Nginx 경유·실기 디스플레이는 미실측).
 - 테스트: `python3 -m unittest discover -s tests -t .` → 128개 통과(기준선 61개)
 
 ## 3. Phase 2A — 게임 경제 엔진 안정화
@@ -381,8 +384,9 @@ API    중복 opId 재실행, 관리자/공개 타임스탬프, 공개 이벤트
 
 ## 16. 미해결 이슈와 후속 제안
 
-1. **Raspberry Pi 실측 없음** — 모든 성능 수치는 macOS 개발 호스트 측정입니다. 운영 반영 전 Pi에서
-   `tools/qa_perf.py`로 1/10/100명 부하와 1시간 soak를 다시 측정해야 합니다.
+1. **Raspberry Pi 1차만 실측** — 2026-11-25에 Pi 임시 인스턴스로 서버 부하(1/10/100명·soak)와
+   headless Chromium FPS를 측정했습니다. 운영 Nginx 경유·WAN 관전자·GPU 있는 실기 디스플레이는
+   미측정이므로, 배포 승인 시 운영 경로로 한 번 더 확인해야 합니다.
 2. 공개 API Rate Limit 미도입 — 스냅샷 캐시로 요청 비용은 낮아졌으나, 외부에서 폭주하면 Nginx
    `limit_req`로 막는 것을 제안합니다.
 3. 이벤트 보존 400개는 고정값입니다. 공개 관전 로그를 더 길게 보여주려면 보존·최대 응답 크기 정책을

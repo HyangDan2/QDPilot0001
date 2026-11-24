@@ -380,6 +380,12 @@ def make_handler(store, dev_user=None, static_root=None, public_root=None, dev_r
     )
 
 
+class Server(ThreadingHTTPServer):
+    # The stdlib default backlog is 5, which drops SYNs (and adds ~1s retry
+    # latency) when many viewers connect at once. Accept bursts instead.
+    request_queue_size = 128
+
+
 def make_server(host, port, **kwargs):
     handler = make_handler(**kwargs)
-    return ThreadingHTTPServer((host, port), handler)
+    return Server((host, port), handler)

@@ -40,8 +40,9 @@ static/public/      # 공개 월드 뷰 (index.html, world.js)
 static/public/assets/engine/   # Canvas 2D 엔진 모듈 (config·animation·sprites·effects·room·motion·scene)
 static/public/assets/sprites/  # 스프라이트와 manifest.json (시트 미납품 시 단일 이미지 fallback)
 art/                # 웹 루트 밖 아트 원본(source)·반입 대기(export) — 서빙되지 않음
-docs/               # GAME_DESIGN, ECONOMY_SPEC, ANIMATION_SPEC, ART_DIRECTION, ASSET_REQUIREMENTS, DB_MIGRATION, notes
-tests/              # 127개 단위·통합 테스트 (UDS 포함)
+docs/               # GAME_DESIGN, ECONOMY_SPEC, ANIMATION_SPEC, ART_DIRECTION, ASSET_REQUIREMENTS, DB_MIGRATION, PHASE2_*, PERFORMANCE_REPORT, notes
+tools/              # qa_perf.py — 공개/관리자 부하·soak 하네스 (표준 라이브러리)
+tests/              # 128개 단위·통합 테스트 (UDS 포함)
 ```
 
 ## 로컬 실행
@@ -84,8 +85,16 @@ python3 -m server --dev-user hd2service --static-root static --public-root stati
 ## 테스트
 
 ```bash
-python3 -m unittest discover -s tests -t . -v   # 127 tests (실제 UDS 4건 포함)
+python3 -m unittest discover -s tests -t . -v   # 128 tests (실제 UDS 4건 포함)
+
+# 부하·soak (실행 중인 서버 대상, 프록시 우회 내장)
+python3 tools/qa_perf.py public --base http://127.0.0.1:8123 --viewers 100 --seconds 30 --interval 1
+python3 tools/qa_perf.py action --base http://127.0.0.1:8123 --workers 10 --ops 5
 ```
+
+Phase 2 검증 결과: [`docs/PHASE2_QA_REPORT.md`](docs/PHASE2_QA_REPORT.md),
+[`docs/PERFORMANCE_REPORT.md`](docs/PERFORMANCE_REPORT.md), 구현 범위·커밋은
+[`docs/PHASE2_IMPLEMENTATION_REPORT.md`](docs/PHASE2_IMPLEMENTATION_REPORT.md).
 
 ## 배포 (요약)
 

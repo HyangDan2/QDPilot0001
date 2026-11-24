@@ -127,14 +127,58 @@ class StoreTests(unittest.TestCase):
         later = store.world(NOW + 21, since=second.cursor)
         self.assertEqual(later.events, [])
 
-    def test_reset_action_restores_the_world(self):
+    def test_reset_action_restores_the_run_and_keeps_meta(self):
         store = self.open()
         store.world(NOW)
         store.world(NOW + 1, action={"type": "buyServer", "tier": "cache", "qty": 1}, op_id=OP, actor="hd2service")
+        before = store.world(NOW + 2).state
         result = store.world(NOW + 2, action={"type": "reset"}, op_id="op_reset_01", actor="hd2service")
         self.assertEqual(result.state["servers"], {"cache": 1})
-        self.assertEqual(result.state["tokens"], 0)
+        self.assertEqual(result.state["tokens"], before["tokens"])
+        self.assertEqual(result.state["total_lifetime"], before["total_lifetime"])
+        self.assertEqual(result.state["reboots"], before["reboots"])
+        self.assertEqual(result.state["achievements"], before["achievements"])
         self.assertIn("reset", [event["kind"] for event in result.events])
+
+    def test_hard_reset_backs_up_and_audits(self):
+        backup_dir = os.path.join(self.tmp.name, "backups")
+        store = Store(self.path, backup_dir=backup_dir)
+        store.world(NOW)
+        store.world(NOW + 1, action={"type": "buyServer", "tier": "cache", "qty": 1}, op_id=OP, actor="hd2service")
+        populated = store.world(NOW + 2).state
+        self.assertGreater(populated["total_lifetime"], 0)
+        result = store.hard_reset(NOW + 3, "op_hard_01", actor="overlord")
+        self.assertEqual(result.state["tokens"], 0)
+        self.assertEqual(result.state["total_lifetime"], 0.0)
+        self.assertEqual(result.state["reboots"], 0)
+        self.assertEqual(result.state["servers"], {"cache": 1})
+        self.assertIn("reset", [event["kind"] for event in result.events])
+        backup = result.details["backup"]
+        self.assertTrue(os.path.isfile(backup))
+        with sqlite3.connect(backup) as con:
+            self.assertEqual(con.execute("PRAGMA quick_check").fetchone()[0], "ok")
+            state = json.loads(con.execute("SELECT state_json FROM world WHERE id = 1").fetchone()[0])
+        self.assertGreater(state["total_lifetime"], 0)
+        with sqlite3.connect(self.path) as con:
+            row = con.execute("SELECT actor, action, detail_json FROM audit_log").fetchall()
+        self.assertEqual(len(row), 1)
+        self.assertEqual(row[0][0], "overlord")
+        self.assertEqual(row[0][1], "hardReset")
+        detail = json.loads(row[0][2])
+        self.assertEqual(detail["backup"], backup)
+        self.assertEqual(detail["op_id"], "op_hard_01")
+        self.assertGreater(detail["total_lifetime"], 0)
+
+    def test_hard_reset_retry_does_not_reapply_or_rebackup(self):
+        backup_dir = os.path.join(self.tmp.name, "backups")
+        store = Store(self.path, backup_dir=backup_dir)
+        store.world(NOW)
+        first = store.hard_reset(NOW + 1, "op_hard_02", actor="overlord")
+        second = store.hard_reset(NOW + 2, "op_hard_02", actor="overlord")
+        self.assertTrue(second.duplicate)
+        self.assertEqual(len(os.listdir(backup_dir)), 1)
+        self.assertEqual(second.state["tokens"], 0)
+        self.assertLess(second.state["total_lifetime"], 1.0)
 
     def test_corrupt_world_state_is_rejected(self):
         store = self.open()

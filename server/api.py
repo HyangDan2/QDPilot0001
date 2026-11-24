@@ -30,6 +30,8 @@ PUBLIC_API = PUBLIC_BASE + "/api/v1"
 MAX_BODY = 8 * 1024
 OP_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 ACTION_TYPES = {"buyServer", "buyUpgrade", "reboot", "reset"}
+HARD_RESET_CONFIRM = "HARD RESET"
+OVERLORD_ROLE = "admiral"
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
@@ -77,6 +79,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "HD2LabIdleOps/1.1"
     store = None
     dev_user = None
+    dev_role = None
     static_root = None
     public_root = None
 
@@ -105,6 +108,12 @@ class Handler(BaseHTTPRequestHandler):
         if not user and self.dev_user:
             user = self.dev_user
         return user
+
+    def _role(self):
+        role = (self.headers.get("X-HD2Lab-Role") or "").strip()
+        if not role and self.dev_role:
+            role = self.dev_role
+        return role
 
     def _read_json(self):
         try:
@@ -181,6 +190,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == ADMIN_API + "/reset":
             self._handle_action(reset=True)
             return
+        if path == ADMIN_API + "/hard-reset":
+            self._handle_hard_reset()
+            return
         if path.startswith(PUBLIC_API + "/"):
             self.close_connection = True
             self.send_response(405)
@@ -249,6 +261,40 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._json(200, build_payload(result, now))
 
+    def _handle_hard_reset(self):
+        user = self._username()
+        if not user:
+            self._json(401, {"detail": "admin authentication required"})
+            return
+        if self._role() != OVERLORD_ROLE:
+            self._json(403, {"detail": f"{OVERLORD_ROLE} role required"})
+            return
+        try:
+            body = self._read_json()
+        except OverflowError:
+            self.close_connection = True
+            self._json(413, {"detail": "request body too large"})
+            return
+        except ValueError as exc:
+            self._json(400, {"detail": str(exc)})
+            return
+        if body.get("confirm") != HARD_RESET_CONFIRM:
+            self._json(400, {"detail": f"confirmation must be {HARD_RESET_CONFIRM}"})
+            return
+        op_id = body.get("opId")
+        if not isinstance(op_id, str) or not OP_ID.fullmatch(op_id):
+            self._json(400, {"detail": "invalid opId"})
+            return
+        now = time.time()
+        try:
+            result = self.store.hard_reset(now, op_id, actor=user)
+        except (OSError, sqlite3.Error) as exc:
+            self._error(RuntimeError(f"hard reset failed: {exc}"))
+            return
+        payload = build_payload(result, now)
+        payload["backup"] = (result.details or {}).get("backup")
+        self._json(200, payload)
+
     def _error(self, exc):
         self.log_message("error: %s", exc)
         self._json(500, {"detail": "internal error"})
@@ -282,7 +328,7 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
-def make_handler(store, dev_user=None, static_root=None, public_root=None):
+def make_handler(store, dev_user=None, static_root=None, public_root=None, dev_role=None):
     return type(
         "BoundHandler",
         (Handler,),
@@ -291,6 +337,7 @@ def make_handler(store, dev_user=None, static_root=None, public_root=None):
             "dev_user": dev_user,
             "static_root": static_root,
             "public_root": public_root,
+            "dev_role": dev_role,
         },
     )
 

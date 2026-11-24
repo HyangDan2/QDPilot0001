@@ -262,16 +262,50 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(state["total_lifetime"], 5_000_000)
         self.assertIn("first_server", state["achievements"])
 
-    def test_reset_keeps_timestamps(self):
-        state = fresh(tokens=4, total_lifetime=123_456)
+    def test_reset_keeps_meta_progress(self):
+        state = fresh(
+            tokens=4,
+            total_lifetime=123_456,
+            reboots=2,
+            achievements=["first_server", "first_reboot"],
+            servers={"app": 3},
+            upgrades={"network": 2},
+            run_lifetime=50_000,
+        )
         state["created_at"] = NOW - 500
         state["last_sim_at"] = NOW
         economy.apply_action(state, {"type": "reset"})
-        self.assertEqual(state["tokens"], 0)
-        self.assertEqual(state["total_lifetime"], 0.0)
+        self.assertEqual(state["tokens"], 4)
+        self.assertEqual(state["total_lifetime"], 123_456)
+        self.assertEqual(state["reboots"], 2)
+        self.assertEqual(state["achievements"], ["first_server", "first_reboot"])
         self.assertEqual(state["created_at"], NOW - 500)
         self.assertEqual(state["last_sim_at"], NOW)
         self.assertEqual(state["servers"], {"cache": 1})
+        self.assertEqual(state["upgrades"], {})
+        self.assertEqual(state["run_lifetime"], 0.0)
+        self.assertEqual(economy.derived(state)["level"], 4)
+
+    def test_hard_reset_zeroes_everything(self):
+        state = fresh(
+            tokens=4,
+            total_lifetime=123_456,
+            reboots=2,
+            achievements=["first_server"],
+            servers={"gpu": 2},
+            upgrades={"network": 3},
+            run_lifetime=50_000,
+        )
+        economy.apply_action(state, {"type": "hardReset"}, NOW + 10)
+        self.assertEqual(state["tokens"], 0)
+        self.assertEqual(state["total_lifetime"], 0.0)
+        self.assertEqual(state["reboots"], 0)
+        self.assertEqual(state["achievements"], [])
+        self.assertEqual(state["servers"], {"cache": 1})
+        self.assertEqual(state["upgrades"], {})
+        self.assertEqual(state["run_lifetime"], 0.0)
+        self.assertEqual(state["created_at"], NOW + 10)
+        self.assertEqual(state["last_sim_at"], NOW + 10)
 
     def test_unknown_action(self):
         with self.assertRaises(ValueError):

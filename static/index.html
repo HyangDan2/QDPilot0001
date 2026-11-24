@@ -175,6 +175,15 @@
       </div>
       <ol id="log-list" class="log-list" aria-live="polite"></ol>
     </section>
+
+    <section class="panel danger-panel" aria-labelledby="danger-title">
+      <div class="panel-head">
+        <h2 id="danger-title">위험 구역 · Hard Reset</h2>
+        <p class="panel-note">최고 관리자(admiral) 전용</p>
+      </div>
+      <p class="danger-copy">누적 생산량, 운영 레벨, 업적, 가동 토큰, Reboot 횟수를 포함한 모든 진행과 서버실이 삭제됩니다. 실행 전 데이터베이스가 자동으로 백업되고 감사 로그에 기록되며, 되돌릴 수 없습니다.</p>
+      <button id="hard-reset-open" class="button danger" type="button">Hard Reset…</button>
+    </section>
   </main>
 
   <footer class="footer shell">
@@ -183,7 +192,7 @@
       <p>공유 월드 운영 콘솔 · <span id="footer-sync">동기화 대기</span></p>
     </div>
     <a class="text-button" href="/idle-ops/" target="_blank" rel="noopener">공개 월드 보기 ↗</a>
-    <button id="reset-open" class="text-button" type="button">월드 초기화</button>
+    <button id="reset-open" class="text-button" type="button">런 초기화</button>
     <a class="text-button" href="/admin/">관리자 홈</a>
   </footer>
 
@@ -222,11 +231,22 @@
   </dialog>
 
   <dialog id="reset-dialog" class="dialog">
-    <h2>공유 월드를 초기화할까요?</h2>
-    <p>요청, 서버, 업그레이드, 토큰, 업적, 레벨이 모두 초기화되고 공개 월드에도 즉시 반영됩니다. 되돌릴 수 없습니다.</p>
+    <h2>현재 런을 초기화할까요?</h2>
+    <p>보유 요청, 서버, 업그레이드가 초기화되고 공개 월드에도 즉시 반영됩니다. 누적 생산량, 운영 레벨, 업적, 가동 토큰, Reboot 횟수는 유지됩니다.</p>
     <div class="dialog-actions">
       <button id="reset-cancel" class="button" type="button">취소</button>
-      <button id="reset-confirm" class="button danger" type="button">모두 삭제</button>
+      <button id="reset-confirm" class="button danger" type="button">런 초기화</button>
+    </div>
+  </dialog>
+
+  <dialog id="hard-reset-dialog" class="dialog">
+    <h2>월드를 완전히 초기화할까요?</h2>
+    <p>누적 생산량, 운영 레벨, 업적, 가동 토큰, Reboot 횟수를 포함한 모든 기록이 삭제됩니다. 실행 전 DB가 자동으로 백업되며 되돌릴 수 없습니다. 최고 관리자(admiral)만 실행할 수 있습니다.</p>
+    <label class="confirm-field" for="hard-reset-input">계속하려면 <strong>HARD RESET</strong>을 입력하세요.</label>
+    <input id="hard-reset-input" class="text-input" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false">
+    <div class="dialog-actions">
+      <button id="hard-reset-cancel" class="button" type="button">취소</button>
+      <button id="hard-reset-confirm" class="button danger" type="button" disabled>영구 삭제</button>
     </div>
   </dialog>
 

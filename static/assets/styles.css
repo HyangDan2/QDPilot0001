@@ -224,6 +224,22 @@ a { color: inherit; }
 }
 .panel-head h2 { font-size: 18px; letter-spacing: -0.01em; }
 .panel-note { color: var(--muted); font-size: 13px; }
+.danger-panel { border-color: var(--danger); }
+.danger-copy { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+.confirm-field { display: block; margin-top: 16px; font-size: 13px; color: var(--muted); }
+.confirm-field strong { color: var(--text); }
+.text-input {
+  width: 100%;
+  margin-top: 8px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+.text-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .kicker {
   font-size: 11px;
   font-weight: 800;

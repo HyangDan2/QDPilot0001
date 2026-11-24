@@ -56,11 +56,13 @@ class ApiTests(unittest.TestCase):
         cls.server.server_close()
         cls.tmp.cleanup()
 
-    def call(self, method, path, body=None, user=USER, raw_body=None):
+    def call(self, method, path, body=None, user=USER, raw_body=None, role=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         headers = {}
         if user:
             headers["X-HD2Lab-User"] = user
+        if role:
+            headers["X-HD2Lab-Role"] = role
         payload = raw_body
         if body is not None:
             payload = json.dumps(body)
@@ -177,6 +179,47 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(body["state"]["servers"], {"cache": 1})
         self.assertEqual(body["state"]["tokens"], 0)
         self.assertIn("초기화", body["message"])
+
+    def test_hard_reset_requires_overlord_role(self):
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_role", "confirm": "HARD RESET"}, user="crew", role="crew",
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("admiral", body["detail"])
+        status, _, _ = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_role", "confirm": "HARD RESET"}, user=None,
+        )
+        self.assertEqual(status, 401)
+
+    def test_hard_reset_requires_exact_confirmation(self):
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_conf", "confirm": "hard reset"}, user="boss", role="admiral",
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("HARD RESET", body["detail"])
+
+    def test_hard_reset_zeroes_world_and_returns_backup(self):
+        self.call("GET", ADMIN + "/api/v1/state", user="boss")
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_ok_1", "confirm": "HARD RESET"}, user="boss", role="admiral",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["state"]["tokens"], 0)
+        self.assertEqual(body["state"]["total_lifetime"], 0)
+        self.assertEqual(body["state"]["reboots"], 0)
+        self.assertTrue(os.path.isfile(body["backup"]))
+
+    def test_generic_actions_endpoint_rejects_hard_reset(self):
+        status, _, _ = self.call(
+            "POST", ADMIN + "/api/v1/actions",
+            body={"opId": "op_hard_gen", "action": {"type": "hardReset"}},
+            user="boss", role="admiral",
+        )
+        self.assertEqual(status, 400)
 
     def test_unauthorised_action(self):
         status, _, _ = self.call(

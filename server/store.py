@@ -27,6 +27,7 @@ EVENT_KINDS = {
     "buyUpgrade": "upgrade",
     "reboot": "reboot",
     "reset": "reset",
+    "hardReset": "reset",
 }
 
 
@@ -52,10 +53,13 @@ def _clean_actor(actor):
 
 
 class Store:
-    def __init__(self, path):
+    def __init__(self, path, backup_dir=None):
         self.path = os.fspath(path)
         parent = os.path.dirname(os.path.abspath(self.path))
         os.makedirs(parent, exist_ok=True)
+        self.backup_dir = os.fspath(
+            backup_dir or os.environ.get("IDLE_OPS_BACKUP_DIR") or os.path.join(parent, "backups")
+        )
         with self._connect() as con:
             con.executescript(
                 """
@@ -86,6 +90,13 @@ class Store:
                     created_at REAL NOT NULL,
                     PRIMARY KEY (username, op_id)
                 ) WITHOUT ROWID;
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at  REAL NOT NULL,
+                    actor       TEXT NOT NULL,
+                    action      TEXT NOT NULL,
+                    detail_json TEXT NOT NULL
+                );
                 """
             )
             con.execute("DELETE FROM action_ops WHERE created_at < ?", (self._now() - OP_TTL_SECONDS,))
@@ -145,6 +156,53 @@ class Store:
         cursor = events[-1]["id"] if events else int(since)
         return events, cursor
 
+    def _op_seen(self, op_id):
+        con = self._connect()
+        try:
+            row = con.execute("SELECT 1 FROM world_ops WHERE op_id = ?", (op_id,)).fetchone()
+            return row is not None
+        finally:
+            con.close()
+
+    def _backup(self, now):
+        os.makedirs(self.backup_dir, exist_ok=True)
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now))
+        base = os.path.join(self.backup_dir, f"idle-ops-pre-hardreset-{stamp}")
+        target = base + ".sqlite3"
+        suffix = 2
+        while os.path.exists(target):
+            target = f"{base}-{suffix}.sqlite3"
+            suffix += 1
+        source = self._connect()
+        try:
+            dest = sqlite3.connect(target)
+            try:
+                source.backup(dest)
+            finally:
+                dest.close()
+        finally:
+            source.close()
+        check = sqlite3.connect(target)
+        try:
+            status = check.execute("PRAGMA quick_check").fetchone()[0]
+        finally:
+            check.close()
+        if status != "ok":
+            raise sqlite3.DatabaseError(f"backup verification failed: {status}")
+        return target
+
+    def hard_reset(self, now, op_id, actor=""):
+        """Back up the database, then zero the world. Fails closed on backup error."""
+        if self._op_seen(op_id):
+            return self.world(now, action={"type": "hardReset"}, op_id=op_id, actor=actor)
+        backup = self._backup(now)
+        return self.world(
+            now,
+            action={"type": "hardReset", "backup": backup},
+            op_id=op_id,
+            actor=actor,
+        )
+
     def world(self, now, action=None, op_id=None, actor="", since=None) -> WorldResult:
         actor = _clean_actor(actor)
         con = self._connect()
@@ -179,14 +237,36 @@ class Store:
             message = None
             details = None
             if action is not None and not duplicate:
-                details = economy.apply_action(state, action)
+                before = None
+                if action.get("type") == "hardReset":
+                    before = {
+                        "requests": state["requests"],
+                        "run_lifetime": state["run_lifetime"],
+                        "total_lifetime": state["total_lifetime"],
+                        "tokens": state["tokens"],
+                        "reboots": state["reboots"],
+                        "achievements": list(state["achievements"]),
+                    }
+                details = economy.apply_action(state, action, now)
+                if details["type"] == "hardReset":
+                    details["backup"] = action.get("backup")
                 message = details.get("message")
-                payload = {k: v for k, v in details.items() if k != "message"}
+                payload = {
+                    k: v for k, v in details.items()
+                    if k not in ("message", "backup")
+                }
                 if payload.get("type") == "buyUpgrade":
                     payload["upgrade"] = payload.pop("id", None)
                 created.append(self._append_event(
                     con, now, EVENT_KINDS.get(details["type"], details["type"]), actor, payload,
                 ))
+                if before is not None:
+                    before.update({"op_id": op_id, "backup": details.get("backup")})
+                    con.execute(
+                        "INSERT INTO audit_log (created_at, actor, action, detail_json) VALUES (?, ?, ?, ?)",
+                        (float(now), actor, "hardReset",
+                         json.dumps(before, ensure_ascii=False, separators=(",", ":"))),
+                    )
                 for achievement_id in economy.check_achievements(state):
                     if achievement_id not in gains["achievements"]:
                         gains["achievements"].append(achievement_id)

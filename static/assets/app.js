@@ -67,6 +67,11 @@ const els = {
   resetDialog: byId("reset-dialog"),
   resetConfirm: byId("reset-confirm"),
   resetCancel: byId("reset-cancel"),
+  hardResetOpen: byId("hard-reset-open"),
+  hardResetDialog: byId("hard-reset-dialog"),
+  hardResetInput: byId("hard-reset-input"),
+  hardResetConfirm: byId("hard-reset-confirm"),
+  hardResetCancel: byId("hard-reset-cancel"),
   toastRegion: byId("toast-region"),
 };
 
@@ -242,6 +247,7 @@ function localizeError(detail) {
   if (!navigator.onLine) return "오프라인 상태입니다. 연결을 확인하세요.";
   const rules = [
     [/not enough requests/i, "요청이 부족합니다."],
+    [/admiral role required/i, "최고 관리자(admiral) 권한이 필요합니다."],
     [/already maxed/i, "이미 최대 레벨입니다."],
     [/not available yet/i, "아직 Reboot할 수 없습니다."],
     [/invalid action/i, "지원하지 않는 동작입니다."],
@@ -654,17 +660,20 @@ async function load({ initial = false } = {}) {
   }
 }
 
-async function submitAction(action, { reset = false } = {}) {
+async function submitAction(action, { reset = false, hardReset = false } = {}) {
   if (game.pending || game.authError) return null;
   game.pending = true;
   hideError();
   render();
   const seq = ++requestSeq;
   try {
-    const body = reset
-      ? JSON.stringify({ opId: makeOpId() })
-      : JSON.stringify({ opId: makeOpId(), action });
-    const data = await request(reset ? `${API}/reset` : `${API}/actions`, {
+    const body = hardReset
+      ? JSON.stringify({ opId: makeOpId(), confirm: "HARD RESET" })
+      : reset
+        ? JSON.stringify({ opId: makeOpId() })
+        : JSON.stringify({ opId: makeOpId(), action });
+    const path = hardReset ? `${API}/hard-reset` : reset ? `${API}/reset` : `${API}/actions`;
+    const data = await request(path, {
       method: "POST",
       body,
     });
@@ -678,7 +687,7 @@ async function submitAction(action, { reset = false } = {}) {
       showAuth(true);
       return null;
     }
-    if (error.status === 400 || error.status === 413) {
+    if (error.status === 400 || error.status === 413 || error.status === 403) {
       toast(localizeError(error.message), { error: true });
       return null;
     }
@@ -749,6 +758,26 @@ function bindDialogs() {
   els.resetConfirm.addEventListener("click", async () => {
     const data = await submitAction(null, { reset: true });
     if (data) els.resetDialog.close();
+  });
+  const syncHardResetInput = () => {
+    els.hardResetConfirm.disabled = els.hardResetInput.value !== "HARD RESET";
+  };
+  els.hardResetOpen.addEventListener("click", () => {
+    els.hardResetInput.value = "";
+    syncHardResetInput();
+    els.hardResetDialog.showModal();
+    els.hardResetInput.focus();
+  });
+  els.hardResetInput.addEventListener("input", syncHardResetInput);
+  els.hardResetCancel.addEventListener("click", () => els.hardResetDialog.close());
+  els.hardResetConfirm.addEventListener("click", async () => {
+    if (els.hardResetInput.value !== "HARD RESET") return;
+    const data = await submitAction(null, { hardReset: true });
+    if (data) {
+      els.hardResetDialog.close();
+      const backup = String(data.backup || "").split("/").pop();
+      toast(backup ? `Hard Reset 완료 · 백업 ${backup}` : "Hard Reset 완료");
+    }
   });
 }
 

@@ -36,6 +36,7 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8123)
     parser.add_argument("--socket-mode", type=lambda value: int(value, 8), default=0o660)
     parser.add_argument("--dev-user", help="fallback X-HD2Lab-User for local preview only")
+    parser.add_argument("--dev-role", help="fallback X-HD2Lab-Role for local preview only")
     parser.add_argument("--static-root", help="serve the admin UI from this folder (local preview only)")
     parser.add_argument("--public-root", help="serve the public world UI from this folder (local preview only)")
     args = parser.parse_args(argv)
@@ -44,6 +45,7 @@ def main(argv=None):
     handler = make_handler(
         store,
         dev_user=args.dev_user,
+        dev_role=args.dev_role,
         static_root=args.static_root,
         public_root=args.public_root,
     )

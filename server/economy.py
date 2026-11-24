@@ -424,7 +424,35 @@ def catalog(state):
     }
 
 
-def apply_action(state, action):
+def reset_run(state):
+    """Soft reset: clear the current run but keep meta progression."""
+    fresh = initial_state(state["last_sim_at"])
+    fresh["created_at"] = state["created_at"]
+    fresh["last_seen"] = state["last_seen"]
+    for key in ("total_lifetime", "tokens", "reboots"):
+        fresh[key] = state[key]
+    fresh["achievements"] = list(state["achievements"])
+    state.clear()
+    state.update(fresh)
+    return {
+        "type": "reset",
+        "message": "현재 런을 초기화했습니다. 누적 생산량·토큰·업적·레벨은 유지됩니다.",
+    }
+
+
+def hard_reset(state, now=None):
+    """Destructive reset: zero every value and start a brand-new world."""
+    moment = float(state["last_sim_at"] if now is None else now)
+    fresh = initial_state(moment)
+    state.clear()
+    state.update(fresh)
+    return {
+        "type": "hardReset",
+        "message": "월드를 완전히 초기화했습니다. 모든 진행과 기록이 삭제됩니다.",
+    }
+
+
+def apply_action(state, action, now=None):
     if not isinstance(action, dict):
         raise ValueError("action must be an object")
     kind = action.get("type")
@@ -472,11 +500,7 @@ def apply_action(state, action):
         state["upgrades"] = {}
         return {"type": "reboot", "message": f"Reboot 완료. 가동 토큰 +{gain}.", "tokens": gain}
     if kind == "reset":
-        created = state["created_at"]
-        last_sim = state["last_sim_at"]
-        fresh = initial_state(last_sim)
-        fresh["created_at"] = created
-        state.clear()
-        state.update(fresh)
-        return {"type": "reset", "message": "진행을 초기화했습니다."}
+        return reset_run(state)
+    if kind == "hardReset":
+        return hard_reset(state, now)
     raise ValueError("unknown action type")

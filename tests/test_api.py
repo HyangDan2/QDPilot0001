@@ -116,6 +116,30 @@ class ApiTests(unittest.TestCase):
         public = self.call("GET", WORLD + "/api/v1/state", user=None)[2]
         self.assertNotIn("timestamps", public)
 
+    def test_public_event_stream_keeps_admin_details_out(self):
+        self.call("POST", ADMIN + "/api/v1/reset", body={"opId": "op_rst_priv_01"}, user="privacy")
+        self.call(
+            "POST", ADMIN + "/api/v1/actions",
+            body={"opId": "op_priv_install", "action": {"type": "buyServer", "tier": "cache", "qty": 1}},
+            user="privacy",
+        )
+        status, _, body = self.call("GET", WORLD + "/api/v1/state?since=0", user=None)
+        self.assertEqual(status, 200)
+        self.assertIn("cursorReset", body)
+        self.assertIn("eventGap", body)
+        self.assertTrue(body["events"])
+        for event in body["events"]:
+            for secret in ("actor", "opId", "op_id", "message", "backup", "user"):
+                self.assertNotIn(secret, event)
+
+    def test_public_cursor_past_the_newest_event_signals_reset(self):
+        newest = self.call("GET", WORLD + "/api/v1/state?since=0", user=None)[2]["cursor"]
+        status, _, body = self.call("GET", WORLD + "/api/v1/state?since=999999", user=None)
+        self.assertEqual(status, 200)
+        self.assertTrue(body["cursorReset"])
+        self.assertEqual(body["events"], [])
+        self.assertEqual(body["cursor"], newest)
+
     def test_public_read_does_not_touch_the_database(self):
         self.call("GET", ADMIN + "/api/v1/state")
         with sqlite3.connect(self.store.path) as con:

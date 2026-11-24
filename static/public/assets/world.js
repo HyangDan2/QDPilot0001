@@ -411,10 +411,15 @@ function ingest(payload) {
   serverNow = Number(payload.serverTime) || Date.now() / 1000;
   receivedWall = Date.now();
   liveRps = Number(payload.derived.rps) || 0;
+  if (payload.cursorReset || payload.eventGap) {
+    seen.clear();
+    feed = [];
+    if (payload.cursorReset) cursor = 0;
+  }
   cursor = Math.max(cursor, Number(payload.cursor) || 0);
   const events = Array.isArray(payload.events) ? payload.events : [];
   const sawLevelEvent = wasPrimed && events.some((event) => event.kind === "levelup");
-  pushEvents(events, wasPrimed);
+  pushEvents(events, wasPrimed && !payload.cursorReset && !payload.eventGap);
   renderHud();
   scene?.setWorld(payload.state, payload.derived);
   renderDrawer();

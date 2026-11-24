@@ -9,7 +9,7 @@ import time
 import unittest
 
 from server import economy
-from server.store import OpConflict, SnapshotCache, Store
+from server.store import EVENT_LIMIT, EVENT_RETENTION, OpConflict, SnapshotCache, Store
 
 NOW = 1_700_000_000.0
 OP = "op_aaaaaaaa"
@@ -31,6 +31,18 @@ class StoreTests(unittest.TestCase):
 
     def open(self):
         return Store(self.path)
+
+    def seed_events(self, count):
+        with sqlite3.connect(self.path) as con:
+            for index in range(count):
+                con.execute(
+                    "INSERT INTO world_events (created_at, kind, actor, payload_json) VALUES (?, ?, ?, ?)",
+                    (NOW + index, "install", "admiral", json.dumps({"tier": "cache", "qty": 1})),
+                )
+
+    def max_event_id(self):
+        with sqlite3.connect(self.path) as con:
+            return int(con.execute("SELECT MAX(id) FROM world_events").fetchone()[0] or 0)
 
     def test_first_world_seeds_the_shared_start(self):
         result = self.open().world(NOW)
@@ -98,6 +110,67 @@ class StoreTests(unittest.TestCase):
         store.world(NOW + 1, action={"type": "buyServer", "tier": "cache", "qty": 1}, op_id=OP, actor="alice")
         bob = store.world(NOW + 2, actor="bob")
         self.assertEqual(bob.state["servers"], {"cache": 2})
+
+    def test_public_events_are_ordered_and_resume_by_cursor(self):
+        store = self.open()
+        store.world(NOW)
+        self.seed_events(5)
+        cache = SnapshotCache(store)
+        events, cursor, cursor_reset, gap = cache.read_events(0)
+        ids = [event["id"] for event in events]
+        self.assertEqual(ids, sorted(ids))
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertFalse(cursor_reset)
+        self.assertFalse(gap)
+
+        again, next_cursor, _, _ = cache.read_events(cursor)
+        self.assertEqual(again, [])
+        self.assertEqual(next_cursor, cursor)
+
+    def test_long_absence_returns_only_the_newest_window(self):
+        store = self.open()
+        store.world(NOW)
+        self.seed_events(200)
+        events, cursor, cursor_reset, gap = SnapshotCache(store).read_events(0)
+        self.assertTrue(gap)
+        self.assertFalse(cursor_reset)
+        self.assertEqual(len(events), EVENT_LIMIT)
+        self.assertEqual([event["id"] for event in events], sorted(event["id"] for event in events))
+        self.assertEqual(cursor, events[-1]["id"])
+        self.assertEqual(cursor, self.max_event_id())
+
+    def test_cursor_past_the_newest_event_signals_reset(self):
+        store = self.open()
+        store.world(NOW)
+        cache = SnapshotCache(store)
+        events, cursor, _, _ = cache.read_events(0)
+        self.assertTrue(events)
+        with sqlite3.connect(self.path) as con:
+            con.execute("DELETE FROM world_events")
+        resumed, reset_cursor, cursor_reset, _ = cache.read_events(cursor)
+        self.assertTrue(cursor_reset)
+        self.assertEqual(resumed, [])
+        self.assertEqual(reset_cursor, 0)
+
+    def test_world_cursor_past_the_newest_event_signals_reset(self):
+        store = self.open()
+        first = store.world(NOW, since=0, actor="alice")
+        self.assertFalse(first.cursor_reset)
+        with sqlite3.connect(self.path) as con:
+            con.execute("DELETE FROM world_events")
+        resumed = store.world(NOW + 1, since=first.cursor + 5, actor="alice")
+        self.assertTrue(resumed.cursor_reset)
+        self.assertEqual(resumed.events, [])
+        self.assertEqual(resumed.cursor, 0)
+
+    def test_retention_prunes_old_events_on_write(self):
+        store = self.open()
+        store.world(NOW)
+        self.seed_events(EVENT_RETENTION + 50)
+        store.world(NOW + 1, action={"type": "buyServer", "tier": "cache", "qty": 1}, op_id=OP)
+        with sqlite3.connect(self.path) as con:
+            count = int(con.execute("SELECT COUNT(*) FROM world_events").fetchone()[0])
+        self.assertLessEqual(count, EVENT_RETENTION)
 
     def test_action_is_idempotent_per_op_id(self):
         store = self.open()

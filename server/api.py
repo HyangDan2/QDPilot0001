@@ -71,6 +71,8 @@ def build_payload(result, now):
         "duplicate": result.duplicate,
         "events": result.events,
         "cursor": result.cursor,
+        "cursorReset": bool(result.cursor_reset),
+        "eventGap": bool(result.event_gap),
         **({"timestamps": result.timestamps} if result.timestamps else {}),
     }
 

@@ -26,8 +26,11 @@ OP_TTL_SECONDS = 30 * 86400
 
 class OpConflict(Exception):
     """Raised when one opId is reused for a different action."""
+
+
 EVENT_RETENTION = 400
 EVENT_LIMIT = 60
+EVENT_BYTES = 24 * 1024
 EVENT_KINDS = {
     "buyServer": "install",
     "buyUpgrade": "upgrade",
@@ -49,6 +52,8 @@ class WorldResult:
     now: float = 0.0
     away: float = 0.0
     timestamps: dict | None = None
+    cursor_reset: bool = False
+    event_gap: bool = False
 
     @property
     def away_seconds(self):
@@ -66,6 +71,61 @@ def _clean_actor(actor):
     if not isinstance(actor, str):
         return ""
     return "".join(ch for ch in actor if ch.isprintable())[:64]
+
+
+def _event_payload(row):
+    payload = json.loads(row[3])
+    payload.update({"id": int(row[0]), "kind": row[2], "at": float(row[1])})
+    return payload
+
+
+def _read_events(con, since):
+    """Return (events, cursor, cursor_reset, gap) for events after ``since``.
+
+    ``cursor_reset`` is set when the cursor is past the newest stored id, which
+    happens after the database is restored from an older backup. ``gap`` is set
+    when the cursor fell out of the retention window or when more events are
+    pending than one response may carry; in that case only the newest window is
+    returned so a long absence never replays a flood of old events.
+    """
+    bounds = con.execute("SELECT MIN(id), MAX(id) FROM world_events").fetchone()
+    low = int(bounds[0] or 0)
+    high = int(bounds[1] or 0)
+    start = int(since)
+    cursor_reset = start > high
+    if cursor_reset:
+        start = high
+    gap = start < low - 1
+    pending = int(
+        con.execute("SELECT COUNT(*) FROM world_events WHERE id > ?", (start,)).fetchone()[0]
+    )
+    if pending > EVENT_LIMIT:
+        gap = True
+        rows = con.execute(
+            "SELECT id, created_at, kind, payload_json FROM world_events "
+            "WHERE id > ? ORDER BY id DESC LIMIT ?",
+            (start, EVENT_LIMIT),
+        ).fetchall()
+        rows.reverse()
+    else:
+        rows = con.execute(
+            "SELECT id, created_at, kind, payload_json FROM world_events "
+            "WHERE id > ? ORDER BY id ASC LIMIT ?",
+            (start, EVENT_LIMIT),
+        ).fetchall()
+    chosen = []
+    size = 0
+    for row in reversed(rows):
+        cost = len(str(row[3])) + 64
+        if chosen and size + cost > EVENT_BYTES:
+            gap = True
+            break
+        chosen.append(row)
+        size += cost
+    chosen.reverse()
+    events = [_event_payload(row) for row in chosen]
+    cursor = events[-1]["id"] if events else (high if cursor_reset else start)
+    return events, cursor, cursor_reset, gap
 
 
 class Store:
@@ -175,18 +235,7 @@ class Store:
         return int(cur.lastrowid)
 
     def _events(self, con, since):
-        rows = con.execute(
-            "SELECT id, created_at, kind, payload_json FROM world_events "
-            "WHERE id > ? ORDER BY id ASC LIMIT ?",
-            (int(since), EVENT_LIMIT),
-        ).fetchall()
-        events = []
-        for row in rows:
-            payload = json.loads(row["payload_json"])
-            payload.update({"id": int(row["id"]), "kind": row["kind"], "at": float(row["created_at"])})
-            events.append(payload)
-        cursor = events[-1]["id"] if events else int(since)
-        return events, cursor
+        return _read_events(con, since)
 
     def _op_seen(self, op_id):
         con = self._connect()
@@ -374,7 +423,7 @@ class Store:
             max_cursor = int(cursor_row["cursor"] or 0)
             if since is None:
                 since = max(0, (created[0] if created else max_cursor + 1) - 1)
-            events, cursor = self._events(con, int(since))
+            events, cursor, cursor_reset, gap = self._events(con, int(since))
             con.execute("COMMIT")
             self.generation += 1
             return WorldResult(
@@ -388,6 +437,8 @@ class Store:
                 now=now,
                 away=away,
                 timestamps=timestamps,
+                cursor_reset=cursor_reset,
+                event_gap=gap,
             )
         except Exception:
             con.execute("ROLLBACK")
@@ -445,28 +496,17 @@ class SnapshotCache:
     def read_events(self, since):
         con = self._ro_connect()
         if con is None:
-            return [], 0
+            return [], 0, False, False
         try:
-            row = con.execute("SELECT MAX(id) AS cursor FROM world_events").fetchone()
-            max_cursor = int(row[0] or 0)
             if since is None:
-                return [], max_cursor
-            rows = con.execute(
-                "SELECT id, created_at, kind, payload_json FROM world_events "
-                "WHERE id > ? ORDER BY id ASC LIMIT ?",
-                (int(since), EVENT_LIMIT),
-            ).fetchall()
+                row = con.execute("SELECT MAX(id) FROM world_events").fetchone()
+                return [], int(row[0] or 0), False, False
+            events, cursor, cursor_reset, gap = _read_events(con, since)
         except sqlite3.OperationalError:
-            return [], 0
+            return [], 0, False, False
         finally:
             con.close()
-        events = []
-        for event_id, created_at, kind, payload_json in rows:
-            payload = json.loads(payload_json)
-            payload.update({"id": int(event_id), "kind": kind, "at": float(created_at)})
-            events.append(payload)
-        cursor = events[-1]["id"] if events else int(since)
-        return events, cursor
+        return events, cursor, cursor_reset, gap
 
     def _refresh(self, now):
         state = self.read_state()
@@ -493,11 +533,13 @@ class SnapshotCache:
                 self._at = time.monotonic()
                 self._generation = self.store.generation
             base = self._base
-        events, cursor = self.read_events(since)
+        events, cursor, cursor_reset, gap = self.read_events(since)
         return WorldResult(
             state=base["state"],
             gains=base["gains"],
             events=events,
             cursor=cursor,
             now=base["now"],
+            cursor_reset=cursor_reset,
+            event_gap=gap,
         )

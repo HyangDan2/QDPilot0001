@@ -79,6 +79,33 @@ class ApiTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_duplicate_operation_replays_and_applies_once(self):
+        self.call("POST", ADMIN + "/api/v1/reset", body={"opId": "op_rst_idem_01"}, user="buyer")
+        payload = {"opId": "op_idem_http_1", "action": {"type": "buyServer", "tier": "cache", "qty": 1}}
+        first_status, _, first = self.call("POST", ADMIN + "/api/v1/actions", body=payload, user="buyer")
+        second_status, _, second = self.call("POST", ADMIN + "/api/v1/actions", body=payload, user="buyer")
+        self.assertEqual(first_status, 200)
+        self.assertEqual(second_status, 200)
+        self.assertTrue(second["duplicate"])
+        self.assertEqual(second["state"]["servers"], first["state"]["servers"])
+        self.assertEqual(second["message"], first["message"])
+
+    def test_conflicting_operation_returns_conflict(self):
+        self.call("POST", ADMIN + "/api/v1/reset", body={"opId": "op_rst_idem_02"}, user="buyer")
+        status, _, _ = self.call(
+            "POST", ADMIN + "/api/v1/actions",
+            body={"opId": "op_idem_http_2", "action": {"type": "buyServer", "tier": "cache", "qty": 1}},
+            user="buyer",
+        )
+        self.assertEqual(status, 200)
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/actions",
+            body={"opId": "op_idem_http_2", "action": {"type": "buyServer", "tier": "cache", "qty": 10}},
+            user="buyer",
+        )
+        self.assertEqual(status, 409)
+        self.assertIn("opId", body["detail"])
+
     def test_public_read_does_not_touch_the_database(self):
         self.call("GET", ADMIN + "/api/v1/state")
         with sqlite3.connect(self.store.path) as con:

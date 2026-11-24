@@ -22,6 +22,10 @@ from urllib.parse import quote
 from . import economy
 
 OP_TTL_SECONDS = 30 * 86400
+
+
+class OpConflict(Exception):
+    """Raised when one opId is reused for a different action."""
 EVENT_RETENTION = 400
 EVENT_LIMIT = 60
 EVENT_KINDS = {
@@ -47,6 +51,13 @@ class WorldResult:
     @property
     def away_seconds(self):
         return float(self.gains.get("seconds") or 0.0)
+
+
+def _action_key(action):
+    if not isinstance(action, dict):
+        return None
+    clean = {key: value for key, value in action.items() if key != "backup"}
+    return json.dumps(clean, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _clean_actor(actor):
@@ -75,8 +86,10 @@ class Store:
                     updated_at REAL NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS world_ops (
-                    op_id      TEXT PRIMARY KEY,
-                    created_at REAL NOT NULL
+                    op_id       TEXT PRIMARY KEY,
+                    created_at  REAL NOT NULL,
+                    action_json TEXT,
+                    result_json TEXT
                 ) WITHOUT ROWID;
                 CREATE TABLE IF NOT EXISTS world_events (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,6 +118,11 @@ class Store:
                 );
                 """
             )
+            columns = {row[1] for row in con.execute("PRAGMA table_info(world_ops)")}
+            if "action_json" not in columns:
+                con.execute("ALTER TABLE world_ops ADD COLUMN action_json TEXT")
+            if "result_json" not in columns:
+                con.execute("ALTER TABLE world_ops ADD COLUMN result_json TEXT")
             con.execute("DELETE FROM action_ops WHERE created_at < ?", (self._now() - OP_TTL_SECONDS,))
             con.execute("DELETE FROM world_ops WHERE created_at < ?", (self._now() - OP_TTL_SECONDS,))
             self._seed_world(con, self._now())
@@ -220,12 +238,31 @@ class Store:
                 now = self._now()
             now = float(now)
             duplicate = False
+            message = None
+            details = None
             if op_id is not None:
+                con.execute("DELETE FROM world_ops WHERE created_at < ?", (now - OP_TTL_SECONDS,))
+                op_key = _action_key(action)
                 cur = con.execute(
-                    "INSERT OR IGNORE INTO world_ops (op_id, created_at) VALUES (?, ?)",
-                    (op_id, float(now)),
+                    "INSERT OR IGNORE INTO world_ops (op_id, created_at, action_json) VALUES (?, ?, ?)",
+                    (op_id, now, op_key),
                 )
                 duplicate = cur.rowcount == 0
+                if duplicate:
+                    stored = con.execute(
+                        "SELECT action_json, result_json FROM world_ops WHERE op_id = ?",
+                        (op_id,),
+                    ).fetchone()
+                    if (
+                        op_key is not None
+                        and stored["action_json"] is not None
+                        and stored["action_json"] != op_key
+                    ):
+                        raise OpConflict("opId already used for a different action")
+                    if stored["result_json"]:
+                        recorded = json.loads(stored["result_json"])
+                        message = recorded.get("message")
+                        details = recorded.get("details")
 
             row = con.execute("SELECT state_json FROM world WHERE id = 1").fetchone()
             if row is None:
@@ -245,8 +282,6 @@ class Store:
                     con, now, "achievement", actor, {"achievement": achievement_id},
                 ))
 
-            message = None
-            details = None
             if action is not None and not duplicate:
                 before = None
                 if action.get("type") == "hardReset":
@@ -284,6 +319,14 @@ class Store:
                         created.append(self._append_event(
                             con, now, "achievement", actor, {"achievement": achievement_id},
                         ))
+                if op_id is not None:
+                    con.execute(
+                        "UPDATE world_ops SET result_json = ? WHERE op_id = ?",
+                        (json.dumps(
+                            {"message": message, "details": details},
+                            ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+                        ), op_id),
+                    )
 
             state["last_seen"] = float(now)
             con.execute(

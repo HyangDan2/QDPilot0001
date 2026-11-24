@@ -9,7 +9,7 @@ import time
 import unittest
 
 from server import economy
-from server.store import SnapshotCache, Store
+from server.store import OpConflict, SnapshotCache, Store
 
 NOW = 1_700_000_000.0
 OP = "op_aaaaaaaa"
@@ -93,7 +93,7 @@ class StoreTests(unittest.TestCase):
         )
         self.assertTrue(second.duplicate)
         self.assertEqual(second.state["servers"], {"cache": 2})
-        self.assertIsNone(second.message)
+        self.assertEqual(second.message, first.message)
         self.assertGreaterEqual(second.state["requests"], first.state["requests"])
 
     def test_failed_action_rolls_back_and_op_is_not_reserved(self):
@@ -232,6 +232,43 @@ class StoreTests(unittest.TestCase):
         self.assertGreater(result.now, NOW)
         self.assertGreaterEqual(result.state["last_sim_at"], NOW)
         self.assertEqual(result.gains["seconds"], result.now - NOW)
+
+    def test_repeating_an_operation_replays_the_recorded_result(self):
+        store = self.open()
+        store.world(NOW)
+        action = {"type": "buyServer", "tier": "cache", "qty": 1}
+        first = store.world(NOW + 1, action=action, op_id="op_idem_01")
+        again = store.world(NOW + 2, action=action, op_id="op_idem_01")
+        self.assertTrue(again.duplicate)
+        self.assertEqual(again.message, first.message)
+        self.assertEqual(again.details, first.details)
+        self.assertEqual(again.state["servers"], {"cache": 2})
+
+    def test_same_operation_id_with_another_action_conflicts(self):
+        store = self.open()
+        store.world(NOW)
+        store.world(NOW + 1, action={"type": "buyServer", "tier": "cache", "qty": 1}, op_id="op_idem_02")
+        with self.assertRaises(OpConflict):
+            store.world(NOW + 2, action={"type": "buyServer", "tier": "cache", "qty": 10}, op_id="op_idem_02")
+        self.assertEqual(store.world(NOW + 3).state["servers"], {"cache": 2})
+
+    def test_legacy_operation_rows_are_migrated(self):
+        with sqlite3.connect(self.path) as con:
+            con.execute("CREATE TABLE world_ops (op_id TEXT PRIMARY KEY, created_at REAL NOT NULL) WITHOUT ROWID")
+            con.execute("INSERT INTO world_ops VALUES (?, ?)", ("op_legacy_1", time.time()))
+        store = self.open()
+        result = store.world(NOW, action={"type": "buyServer", "tier": "cache", "qty": 1}, op_id="op_legacy_1")
+        self.assertTrue(result.duplicate)
+        self.assertEqual(result.state["servers"], {"cache": 1})
+
+    def test_expired_operation_ids_are_pruned(self):
+        store = self.open()
+        store.world(NOW)
+        with sqlite3.connect(self.path) as con:
+            con.execute("INSERT INTO world_ops (op_id, created_at) VALUES (?, ?)", ("op_old_0001", NOW - 31 * 86400))
+        result = store.world(NOW + 1, action={"type": "buyServer", "tier": "cache", "qty": 1}, op_id="op_old_0001")
+        self.assertFalse(result.duplicate)
+        self.assertEqual(result.state["servers"], {"cache": 2})
 
     def test_corrupt_world_state_is_rejected(self):
         store = self.open()

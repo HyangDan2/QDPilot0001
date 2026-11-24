@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import economy
-from .store import SnapshotCache
+from .store import OpConflict, SnapshotCache
 
 ADMIN_BASE = "/admin/idle-ops"
 ADMIN_API = ADMIN_BASE + "/api/v1"
@@ -264,6 +264,9 @@ class Handler(BaseHTTPRequestHandler):
             since = None
         try:
             result = self.store.world(action=action, op_id=op_id, actor=user, since=since)
+        except OpConflict as exc:
+            self._json(409, {"detail": str(exc)})
+            return
         except ValueError as exc:
             self._json(400, {"detail": str(exc)})
             return
@@ -298,6 +301,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             result = self.store.hard_reset(op_id=op_id, actor=user)
+        except OpConflict as exc:
+            self._json(409, {"detail": str(exc)})
+            return
         except (OSError, sqlite3.Error) as exc:
             self._error(RuntimeError(f"hard reset failed: {exc}"))
             return

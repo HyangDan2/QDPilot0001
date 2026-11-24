@@ -246,6 +246,7 @@ function localizeError(detail) {
   const rules = [
     [/not enough requests/i, "요청이 부족합니다."],
     [/admiral role required/i, "최고 관리자(admiral) 권한이 필요합니다."],
+    [/already used for a different action/i, "같은 작업 번호가 다른 요청에 사용되었습니다. 새로고침 후 다시 시도하세요."],
     [/already maxed/i, "이미 최대 레벨입니다."],
     [/not available yet/i, "아직 Reboot할 수 없습니다."],
     [/invalid action/i, "지원하지 않는 동작입니다."],
@@ -658,41 +659,101 @@ async function load({ initial = false } = {}) {
   }
 }
 
+const OP_KEY = "hd2lab-idle-op";
+
+function readPendingOp() {
+  try {
+    return JSON.parse(sessionStorage.getItem(OP_KEY) || "null");
+  } catch (error) {
+    return null;
+  }
+}
+
+function writePendingOp(value) {
+  try {
+    if (value) sessionStorage.setItem(OP_KEY, JSON.stringify(value));
+    else sessionStorage.removeItem(OP_KEY);
+  } catch (error) { /* storage may be blocked */ }
+}
+
+async function replayPending(pending) {
+  try {
+    const response = await fetch(pending.path, {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: pending.body,
+    });
+    if (response.ok) {
+      writePendingOp(null);
+      load();
+      return true;
+    }
+    if (response.status >= 400 && response.status < 500) {
+      writePendingOp(null);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+function resolvePendingOp() {
+  const pending = readPendingOp();
+  if (pending && pending.path) replayPending(pending);
+}
+
 async function submitAction(action, { reset = false, hardReset = false } = {}) {
   if (game.pending || game.authError) return null;
+  const path = hardReset ? `${API}/hard-reset` : reset ? `${API}/reset` : `${API}/actions`;
+  const fields = hardReset ? { confirm: "HARD RESET" } : reset ? {} : { action };
+  const signature = `${path}|${JSON.stringify(fields)}`;
+  let pending = readPendingOp();
+  if (pending && pending.signature !== signature) {
+    // Never mint a new opId while an earlier one is unresolved.
+    const settled = await replayPending(pending);
+    if (!settled) {
+      toast("이전 요청을 확인하지 못했습니다. 연결을 확인한 뒤 다시 시도하세요.", { error: true });
+      return null;
+    }
+    pending = null;
+  }
+  const opId = pending && pending.opId ? pending.opId : makeOpId();
+  const body = JSON.stringify({ ...fields, opId });
+  pending = { opId, signature, path, body };
+  writePendingOp(pending);
   game.pending = true;
   hideError();
   render();
   const seq = ++requestSeq;
   try {
-    const body = hardReset
-      ? JSON.stringify({ opId: makeOpId(), confirm: "HARD RESET" })
-      : reset
-        ? JSON.stringify({ opId: makeOpId() })
-        : JSON.stringify({ opId: makeOpId(), action });
-    const path = hardReset ? `${API}/hard-reset` : reset ? `${API}/reset` : `${API}/actions`;
     const data = await request(path, {
       method: "POST",
       body,
     });
+    writePendingOp(null);
     if (seq < appliedSeq) return null;
     appliedSeq = seq;
     accept(data);
     return data;
   } catch (error) {
     if (error.auth) {
+      writePendingOp(null);
       setSync("error", "로그인 필요");
       showAuth(true);
       return null;
     }
-    if (error.status === 400 || error.status === 413 || error.status === 403) {
+    if (error.status === 400 || error.status === 413 || error.status === 403 || error.status === 409) {
+      writePendingOp(null);
       toast(localizeError(error.message), { error: true });
       return null;
     }
     game.failures += 1;
     setSync("stale", "동기화 지연");
     showError(localizeError(error.message));
-    toast(localizeError(error.message), { error: true });
+    toast(`${localizeError(error.message)} 같은 작업을 다시 누르면 이어서 처리합니다.`, { error: true });
     return null;
   } finally {
     game.pending = false;
@@ -897,6 +958,7 @@ function init() {
   bindAdminShell();
   selectTab(game.tab);
   renderLog();
+  resolvePendingOp();
   load({ initial: true });
   window.setInterval(() => {
     if (document.hidden || game.pending || game.authError) return;

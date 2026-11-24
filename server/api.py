@@ -20,7 +20,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import economy
+from . import content, economy
 from .store import OpConflict, SnapshotCache
 
 ADMIN_BASE = "/admin/idle-ops"
@@ -167,6 +167,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == ADMIN_API + "/state":
             self._handle_state(public=False)
             return
+        if path == ADMIN_API + "/content":
+            self._handle_content()
+            return
         if path == PUBLIC_API + "/state":
             self._handle_public_state()
             return
@@ -245,6 +248,12 @@ class Handler(BaseHTTPRequestHandler):
             self._error(exc)
             return
         self._json(200, build_payload(result, result.now))
+
+    def _handle_content(self):
+        if not self._username():
+            self._json(401, {"detail": "admin authentication required"})
+            return
+        self._json(200, content.overview())
 
     def _handle_action(self, reset=False):
         user = self._username()

@@ -32,6 +32,7 @@ HD2Lab Server-HQ의 **공유 월드 방치형 게임**입니다. 서버실을 �
 server/economy.py   # 밸런스, 상태 정규화, 액션 검증, 레벨·발열·토큰 계산
 server/store.py     # SQLite(world, world_ops, world_events + 레거시 players) 트랜잭션·멱등 처리 (WAL)
 server/backup.py    # 정합성 백업·검증·복구 CLI (python3 -m server.backup)
+server/content.py   # 밸런스 지문·피처 플래그·콘텐츠 메타데이터 (기본 off)
 server/api.py       # 표준 라이브러리 HTTP API + 관리자/공개 정적 파일 서빙
 server/__main__.py  # UDS/TCP 실행 진입점 (--uds, --host/--port, --static-root, --public-root, --dev-user)
 static/             # Vanilla ES 모듈 관리자 콘솔 (index.html, assets/)
@@ -39,8 +40,8 @@ static/public/      # 공개 월드 뷰 (index.html, world.js)
 static/public/assets/engine/   # Canvas 2D 엔진 모듈 (config·animation·sprites·effects·room·motion·scene)
 static/public/assets/sprites/  # 스프라이트와 manifest.json (시트 미납품 시 단일 이미지 fallback)
 art/                # 웹 루트 밖 아트 원본(source)·반입 대기(export) — 서빙되지 않음
-docs/               # DB_MIGRATION.md, ART_DIRECTION.md, ASSET_REQUIREMENTS.md, notes.md
-tests/              # 119개 단위·통합 테스트 (UDS 포함)
+docs/               # GAME_DESIGN, ECONOMY_SPEC, ANIMATION_SPEC, ART_DIRECTION, ASSET_REQUIREMENTS, DB_MIGRATION, notes
+tests/              # 127개 단위·통합 테스트 (UDS 포함)
 ```
 
 ## 로컬 실행
@@ -67,6 +68,7 @@ python3 -m server --dev-user hd2service --static-root static --public-root stati
 | 〃 | `{"opId":"...","action":{"type":"buyUpgrade","id":"network"}}` |
 | 〃 | `{"opId":"...","action":{"type":"reboot"}}` |
 | `POST /reset` | `{"opId":"..."}` — 월드 초기화(토큰·레벨·업적 유지) |
+| `GET /content` | 밸런스 버전·지문·피처 플래그(기본 off)·임계값 (상태 미포함) |
 | `GET /health/ready` | `{"status":"ok","service":"idle-ops","storage":{...}}` — 저장소·스키마·여유 공간 반영, 실패 시 503 (인증 없음) |
 
 공개 경로 기준: `/idle-ops/api/v1`
@@ -82,7 +84,7 @@ python3 -m server --dev-user hd2service --static-root static --public-root stati
 ## 테스트
 
 ```bash
-python3 -m unittest discover -s tests -t . -v   # 119 tests (실제 UDS 4건 포함)
+python3 -m unittest discover -s tests -t . -v   # 127 tests (실제 UDS 4건 포함)
 ```
 
 ## 배포 (요약)

@@ -370,7 +370,7 @@ def apply_action(state, action):
         state["requests"] -= cost
         state["servers"][tier_id] = owned + qty
         name = _tier(tier_id)["name"]
-        return {"type": "buyServer", "message": f"{name} {qty}대를 설치했습니다.", "qty": qty, "cost": cost}
+        return {"type": "buyServer", "tier": tier_id, "message": f"{name} {qty}대를 설치했습니다.", "qty": qty, "cost": cost}
     if kind == "buyUpgrade":
         upgrade_id = action.get("id")
         spec = _upgrade(upgrade_id)
@@ -382,7 +382,8 @@ def apply_action(state, action):
             raise ValueError("not enough requests")
         state["requests"] -= cost
         state["upgrades"][upgrade_id] = level + 1
-        return {"type": "buyUpgrade", "message": f"{spec['name']} Lv.{level + 1} 업그레이드 완료.", "cost": cost}
+        return {"type": "buyUpgrade", "id": upgrade_id, "level": level + 1,
+                "message": f"{spec['name']} Lv.{level + 1} 업그레이드 완료.", "cost": cost}
     if kind == "reboot":
         gain = prestige_tokens(state["run_lifetime"])
         if gain < 1:

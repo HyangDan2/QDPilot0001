@@ -2,14 +2,17 @@
 
 ![향단이가 서버실을 뛰어다니며 레벨업하고 버그를 잡는 일러스트](static/assets/hyangdani-hero.jpg)
 
-HD2Lab Server-HQ의 **관리자 전용 방치형 게임**입니다. 서버실을 운영해 요청 처리량을 키우고, 레벨·업적·가동 토큰·Reboot로 성장합니다. 앱을 닫아 두어도 진행은 서버에서 이어집니다.
+HD2Lab Server-HQ의 **공유 월드 방치형 게임**입니다. 서버실을 운영해 요청 처리량을 키우고, 레벨·업적·가동 토큰·Reboot로 성장합니다. 앱을 닫아 두어도 진행은 서버에서 이어지며, 공개 화면(`/idle-ops/`)에서는 누구나 같은 월드를 관전할 수 있습니다.
 
 ## 핵심 설계
 
-- **서버 권위**: 클라이언트는 액션 의도(`type`, 티어, 수량, `opId`)만 보냅니다. 비용·보상·상태 전이는 전부 서버(`server/economy.py`)가 계산합니다.
+- **서버 권위 공유 월드**: 상태는 `world` 1행(id=1)이며 모든 방문자가 같은 월드를 봅니다. 관리자 콘솔(`/admin/idle-ops/`, SSO admiral 전용)만 액션을 보낼 수 있고, 공개 경로(`/idle-ops/`)는 읽기 전용입니다.
+- **서버 권위 계산**: 클라이언트는 액션 의도(`type`, 티어, 수량, `opId`)만 보냅니다. 비용·보상·상태 전이는 전부 서버(`server/economy.py`)가 계산합니다.
 - **지연 시뮬레이션(lazy catch-up)**: 상시 tick 루프 없이, 요청이 올 때 `현재 시각 - 마지막 시뮬레이션 시각` 경과분을 한 번에 정산합니다(`requests += rps × elapsed`). 부재 기간 상한은 없고 100년 overflow 보호만 둡니다.
-- **멱등 액션**: `opId`(8~64자 `[A-Za-z0-9_-]`)가 30일간 유일 키로 기록되어 재시도·중복 요청이 상태를 두 번 바꾸지 않습니다.
-- **관리자 SSO 전용**: Nginx가 인증 후 `X-HD2Lab-User`만 Unix socket으로 전달합니다. 익명·공개 세션은 없습니다.
+- **멱등 액션**: `opId`(8~64자 `[A-Za-z0-9_-]`)가 30일간 유일 키(`world_ops`)로 기록되어 재시도·중복 요청이 상태를 두 번 바꾸지 않습니다.
+- **연출 이벤트**: `install`·`upgrade`·`levelup`·`achievement`·`reboot`·`reset`을 `world_events`에 기록하고, 공개 클라이언트는 `?since=<cursor>`로 증분 조회해 설치 연출·레벨업 효과·로그를 재생합니다. 액터 이름은 공개 응답에 포함하지 않습니다.
+- **전환 이관**: 최초 기동 시 기존 `players` 테이블에서 누적 생산량이 가장 큰 행의 상태를 1회 이관합니다. `players`는 삭제하지 않고 보존합니다.
+- **공개 화면**: 의존성 없는 Canvas 2D 미니 엔진(`static/public/assets/engine.js`)이 서버실·설치 애니메이션·향단이 이동/전투를 그리고, `world.js`가 8초 폴링·이벤트 로그·드로워·메뉴를 담당합니다.
 
 ## 성장 규칙 요약
 
@@ -27,41 +30,54 @@ HD2Lab Server-HQ의 **관리자 전용 방치형 게임**입니다. 서버실을
 
 ```text
 server/economy.py   # 밸런스, 상태 정규화, 액션 검증, 레벨·발열·토큰 계산
-server/store.py     # SQLite(players, action_ops) 트랜잭션·멱등 처리 (WAL)
-server/api.py       # 표준 라이브러리 HTTP API + 정적 파일 서빙
-server/__main__.py  # UDS/TCP 실행 진입점 (--uds, --host/--port, --dev-user)
-static/             # Vanilla ES 모듈 UI (index.html, assets/)
-tests/              # 51개 단위·통합 테스트
+server/store.py     # SQLite(world, world_ops, world_events + 레거시 players) 트랜잭션·멱등 처리 (WAL)
+server/api.py       # 표준 라이브러리 HTTP API + 관리자/공개 정적 파일 서빙
+server/__main__.py  # UDS/TCP 실행 진입점 (--uds, --host/--port, --static-root, --public-root, --dev-user)
+static/             # Vanilla ES 모듈 관리자 콘솔 (index.html, assets/)
+static/public/      # 공개 월드 뷰 (index.html, assets/engine.js, world.js, sprites/)
+tests/              # 61개 단위·통합 테스트 (UDS 포함)
 ```
 
 ## 로컬 실행
 
 ```bash
-python3 -m server --dev-user hd2service --static-root static --port 8123 --db /tmp/idle-ops.sqlite3
-# http://127.0.0.1:8123/admin/idle-ops/
+python3 -m server --dev-user hd2service --static-root static --public-root static/public \
+  --port 8123 --db /tmp/idle-ops.sqlite3
+# 관리자 콘솔: http://127.0.0.1:8123/admin/idle-ops/
+# 공개 월드:   http://127.0.0.1:8123/idle-ops/
 ```
+
+운영에서는 Nginx가 공개 정적 파일을 릴리스의 `static/public/`에서 직접 서빙하고, 공개 API(`GET /idle-ops/api/v1/state`)만 UDS로 프록시합니다.
 
 `--dev-user`는 로컬 확인용 fallback이며, 운영에서는 사용하지 않습니다(Nginx가 `X-HD2Lab-User`를 주입).
 
 ## API
 
-모든 경로 기준: `/admin/idle-ops/api/v1`
+관리자 경로 기준: `/admin/idle-ops/api/v1` (SSO admiral 전용)
 
 | 메서드·경로 | 설명 |
 | --- | --- |
-| `GET /state` | 현재 상태·파생값·카탈로그·부재 보상 정보 |
+| `GET /state` | 현재 상태·파생값·카탈로그·부재 보상·이벤트(`since` 지원) |
 | `POST /actions` | `{"opId":"...","action":{"type":"buyServer","tier":"cache","qty":10}}` (qty: 1, 10, "max") |
 | 〃 | `{"opId":"...","action":{"type":"buyUpgrade","id":"network"}}` |
 | 〃 | `{"opId":"...","action":{"type":"reboot"}}` |
-| `POST /reset` | `{"opId":"..."}` — 진행 초기화(토큰·레벨·업적 유지) |
+| `POST /reset` | `{"opId":"..."}` — 월드 초기화(토큰·레벨·업적 유지) |
 | `GET /health/ready` | `{"status":"ok","service":"idle-ops"}` (인증 없음, 준비 상태만) |
 
-오류: 인증 없음 `401`, 잘못된 액션/opId/JSON `400`, 자금 부족 `400`, 본문 초과 `413`, 저장 실패 `500`.
+공개 경로 기준: `/idle-ops/api/v1`
+
+| 메서드·경로 | 설명 |
+| --- | --- |
+| `GET /state?since=<cursor>` | 공개용으로 정제된 `state`·`derived`·`catalog`·`gains`·`events`·`cursor` (인증 없음) |
+
+오류: 인증 없음 `401`, 잘못된 액션/opId/JSON `400`, 자금 부족 `400`, 본문 초과 `413`, 공개 쓰기 `405`(`Allow: GET, HEAD`), 저장 실패 `500`.
+
+`events` 항목은 `type`·`kind`·`at`·`id`(커서)와 이벤트별 필드를 가집니다: `install`(`tier`,`qty`,`cost`), `upgrade`(`upgrade`,`level`,`cost`), `levelup`(`level`), `achievement`(`achievement`), `reboot`(`tokens`), `reset`.
 
 ## 테스트
 
 ```bash
-python3 -m unittest discover -s tests -t . -v
+python3 -m unittest discover -s tests -t . -v   # 61 tests (실제 UDS 4건 포함)
 ```
 
 ## 배포 (요약)

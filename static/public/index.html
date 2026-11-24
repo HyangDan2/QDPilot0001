@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#07070f">
+  <meta name="description" content="HD2Lab Idle Ops — 관리자가 키우는 공유 서버실을 실시간으로 관전하는 월드 뷰.">
+  <title>Idle Ops 월드 · HD2Lab</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/world.css">
+  <script type="module" src="assets/world.js"></script>
+</head>
+<body>
+  <a class="skip" href="#hud-title">현황으로 건너뛰기</a>
+
+  <canvas id="scene" aria-hidden="true"></canvas>
+  <div class="scene-vignette" aria-hidden="true"></div>
+  <div class="scene-scanlines" aria-hidden="true"></div>
+
+  <header class="hud" aria-labelledby="hud-title">
+    <div class="hud-top">
+      <p class="brand" id="hud-title">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-text">HD2LAB <em>IDLE OPS</em></span>
+      </p>
+      <p class="hud-live"><span class="live-dot" aria-hidden="true"></span><span id="sync-state">동기화 중…</span></p>
+      <button id="menu-open" class="icon-btn" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="menu" aria-label="월드 메뉴 열기">
+        <span aria-hidden="true">⋯</span>
+      </button>
+    </div>
+
+    <div class="hud-main">
+      <div class="level-block">
+        <p class="kicker">SHARED WORLD · LV</p>
+        <p class="level-line">
+          <strong id="hud-level">–</strong>
+          <span id="hud-level-bonus" class="level-bonus">–</span>
+        </p>
+        <div class="level-track" id="level-track" role="progressbar" aria-label="다음 레벨 진행도" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <span id="level-bar"></span>
+        </div>
+        <p class="level-next" id="level-next">다음 레벨까지 –</p>
+      </div>
+
+      <dl class="chips" aria-label="서버실 현황">
+        <div class="chip">
+          <dt>초당 처리</dt>
+          <dd><span id="stat-rps">–</span> <small>RPS</small></dd>
+        </div>
+        <div class="chip">
+          <dt>보유 요청</dt>
+          <dd id="stat-requests">–</dd>
+        </div>
+        <div class="chip">
+          <dt>열 · 냉각</dt>
+          <dd id="stat-heat">–</dd>
+        </div>
+        <div class="chip">
+          <dt>가동 토큰</dt>
+          <dd id="stat-tokens">–</dd>
+        </div>
+      </dl>
+    </div>
+  </header>
+
+  <p class="scene-caption" id="scene-caption">
+    향단이가 서버실을 누비며 이슈를 처리하고 있습니다. 화면의 버그 전투는 관전 연출이며 서버 수치와는 무관합니다.
+  </p>
+
+  <section class="feed" aria-labelledby="feed-title">
+    <h2 id="feed-title" class="feed-title"><span class="live-dot" aria-hidden="true"></span> 월드 로그</h2>
+    <ol id="feed-list" class="feed-list" aria-live="polite"></ol>
+    <p id="feed-empty" class="feed-empty">아직 기록이 없습니다. 관리자 콘솔에서 첫 증설을 기다리는 중입니다.</p>
+  </section>
+
+  <div class="fab-cluster">
+    <button id="help-open" class="fab-mini" type="button" aria-label="운영 안내 열기">
+      <span aria-hidden="true">?</span>
+    </button>
+    <a class="fab-mini" href="/admin/idle-ops/" aria-label="관리자 콘솔 열기">
+      <span aria-hidden="true">⚙</span>
+    </a>
+    <button id="drawer-open" class="fab-main" type="button" aria-haspopup="dialog" aria-controls="drawer" aria-expanded="false">
+      <span class="fab-main-icon" aria-hidden="true">☰</span>
+      <span class="fab-main-label">설비</span>
+    </button>
+  </div>
+
+  <div id="scrim" class="scrim" hidden></div>
+
+  <aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden>
+    <header class="drawer-head">
+      <div>
+        <p class="kicker">SERVER ROOM</p>
+        <h2 id="drawer-title">설비 현황</h2>
+        <p id="drawer-summary" class="drawer-summary">–</p>
+      </div>
+      <button id="drawer-close" class="icon-btn" type="button" aria-label="설비 현황 닫기"><span aria-hidden="true">✕</span></button>
+    </header>
+
+    <div class="tabs" role="tablist" aria-label="설비 분류">
+      <button class="tab is-active" type="button" role="tab" aria-selected="true" aria-controls="panel-servers" id="tab-servers">서버</button>
+      <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-upgrades" id="tab-upgrades" tabindex="-1">업그레이드</button>
+      <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-achievements" id="tab-achievements" tabindex="-1">업적</button>
+    </div>
+
+    <div class="drawer-body">
+      <section id="panel-servers" class="tab-panel" role="tabpanel" aria-labelledby="tab-servers">
+        <div id="server-list" class="card-list"></div>
+      </section>
+      <section id="panel-upgrades" class="tab-panel" role="tabpanel" aria-labelledby="tab-upgrades" hidden>
+        <div id="upgrade-list" class="card-list"></div>
+      </section>
+      <section id="panel-achievements" class="tab-panel" role="tabpanel" aria-labelledby="tab-achievements" hidden>
+        <p class="panel-note">업적 보너스는 전체 RPS에 합산됩니다.</p>
+        <div id="achievement-list" class="achievement-list"></div>
+      </section>
+    </div>
+
+    <footer class="drawer-foot">
+      <p>관전 모드입니다. 증설과 업그레이드는 관리자 콘솔에서 진행되며, 이 화면에 즉시 반영됩니다.</p>
+      <a class="btn primary" href="/admin/idle-ops/">관리자 콘솔 열기</a>
+    </footer>
+  </aside>
+
+  <div id="menu" class="menu" role="menu" aria-labelledby="menu-open" hidden>
+    <button class="menu-item" type="button" role="menuitem" data-action="help">운영 안내</button>
+    <button class="menu-item" type="button" role="menuitem" data-action="motion" aria-pressed="false">연출 줄이기</button>
+    <button class="menu-item" type="button" role="menuitem" data-action="fullscreen">전체 화면</button>
+    <a class="menu-item" role="menuitem" href="/service/">서비스 허브</a>
+    <a class="menu-item" role="menuitem" href="/admin/idle-ops/">관리자 콘솔</a>
+  </div>
+
+  <dialog id="help-dialog" class="help">
+    <div class="help-grid">
+      <img id="help-art" class="help-art" src="assets/hero.jpg" width="1400" height="933" loading="lazy" decoding="async" alt="향단이가 서버실에서 망치를 휘둘러 버그를 처치하는 모습">
+      <div class="help-copy">
+        <p class="kicker">HOW IT WORKS</p>
+        <h2>관전 안내</h2>
+        <ul>
+          <li>이 서버실은 <strong>하나의 공유 월드</strong>입니다. 관리자가 증설·업그레이드하면 모든 방문자의 화면에 반영됩니다.</li>
+          <li>요청은 서버에서 실시간으로 쌓입니다. 화면을 닫아도 진행은 멈추지 않습니다.</li>
+          <li>향단이는 맵을 누비며 이슈(버그)를 처리합니다. 전투 연출과 데미지 숫자는 화면 효과이며, 실제 처리량에는 영향을 주지 않습니다.</li>
+          <li>랙·LED·스탯은 서버 상태에서 그려지고, 설치·레벨업·업적 이벤트는 즉시 연출로 표시됩니다.</li>
+          <li>관전 화면은 읽기 전용입니다. 운영은 <a href="/admin/idle-ops/">관리자 콘솔</a>에서 SSO로 진행됩니다.</li>
+        </ul>
+        <form method="dialog"><button class="btn" type="submit">닫기</button></form>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toast-region" class="toasts" role="status" aria-live="polite"></div>
+
+  <div id="loading" class="overlay">
+    <div class="loader">
+      <span class="loader-ring" aria-hidden="true"></span>
+      <p>공유 월드에 접속하는 중…</p>
+    </div>
+  </div>
+
+  <div id="error" class="overlay" hidden>
+    <div class="error-card">
+      <p class="kicker">CONNECTION LOST</p>
+      <h2>월드 상태를 불러오지 못했습니다</h2>
+      <p>잠시 후 다시 시도해 주세요. 서버가 켜져 있으면 진행은 계속되고 있습니다.</p>
+      <button id="retry" class="btn primary" type="button">다시 시도</button>
+    </div>
+  </div>
+
+  <noscript><p class="noscript">이 화면은 JavaScript가 필요합니다.</p></noscript>
+</body>
+</html>

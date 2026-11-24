@@ -51,7 +51,7 @@
   <main id="main" class="shell">
     <section id="auth-panel" class="panel auth-panel" hidden>
       <h1>관리자 로그인이 필요합니다</h1>
-      <p>이 게임은 Server-HQ 공통 SSO로 보호됩니다. 로그인 후 돌아오면 서버에 저장된 진행도가 이어집니다.</p>
+      <p>공유 월드 운영 콘솔은 Server-HQ 공통 SSO로 보호됩니다. 로그인하면 공개 월드(<a href="/idle-ops/">/idle-ops/</a>)의 진행을 계속 운영할 수 있습니다.</p>
       <a class="button primary" href="/auth/login?next=/admin/idle-ops/">로그인</a>
     </section>
 
@@ -63,7 +63,7 @@
     <section class="level-strip" aria-labelledby="level-title">
       <div class="level-head">
         <div>
-          <p class="kicker">OPERATOR LEVEL</p>
+          <p class="kicker">SHARED WORLD · LEVEL</p>
           <h1 id="level-title">가동 레벨 <strong id="level-value">–</strong></h1>
         </div>
         <p id="level-bonus" class="level-bonus">서버 보너스 –</p>
@@ -105,7 +105,7 @@
             <p class="kicker">SERVER ROOM</p>
             <h2 id="rack-title">서버실</h2>
           </div>
-          <p id="rack-summary" class="panel-note">–</p>
+          <p id="rack-summary" class="panel-note">공개 월드에 즉시 반영됩니다.</p>
         </div>
         <div id="rack-grid" class="rack-grid"></div>
         <div id="rack-empty" class="empty" hidden>아직 설치된 서버가 없습니다.</div>
@@ -180,9 +180,10 @@
   <footer class="footer shell">
     <div>
       <strong>HD2Lab Idle Ops</strong>
-      <p>서버 권위 시뮬레이션 · <span id="footer-sync">동기화 대기</span></p>
+      <p>공유 월드 운영 콘솔 · <span id="footer-sync">동기화 대기</span></p>
     </div>
-    <button id="reset-open" class="text-button" type="button">진행 초기화</button>
+    <a class="text-button" href="/idle-ops/" target="_blank" rel="noopener">공개 월드 보기 ↗</a>
+    <button id="reset-open" class="text-button" type="button">월드 초기화</button>
     <a class="text-button" href="/admin/">관리자 홈</a>
   </footer>
 
@@ -201,18 +202,19 @@
     <img class="help-art" src="assets/hyangdani-hero.jpg" width="1200" height="800" loading="lazy" decoding="async" alt="향단이가 서버실을 뛰어다니며 레벨업하고 버그를 잡는 모습">
     <h2>운영 안내</h2>
     <ul class="help-list">
+      <li>이 콘솔은 <strong>하나의 공유 월드</strong>를 운영합니다. 여기서 증설·업그레이드한 내용이 공개 월드(<a href="/idle-ops/">/idle-ops/</a>) 관전 화면에 즉시 반영됩니다.</li>
       <li>요청은 서버에서 실시간으로 쌓입니다. 앱을 닫아도 진행이 멈추지 않습니다.</li>
       <li>서버와 업그레이드를 사면 초당 처리량(RPS)이 올라갑니다. 발열이 냉각 용량을 넘으면 효율이 떨어집니다.</li>
       <li>운영 레벨은 누적 요청으로 오르며, 레벨당 전체 RPS가 1% 증가합니다.</li>
       <li>Reboot는 이번 런을 초기화하고 가동 토큰을 남깁니다. 토큰 1개당 전체 RPS +2%입니다.</li>
-      <li>모든 계산·저장은 서버에서 이루어지며, 진행도는 관리자 계정에 귀속됩니다.</li>
+      <li>모든 계산·저장은 서버에서 이루어지며, 운영 액션은 관리자 SSO 사용자만 수행할 수 있습니다.</li>
     </ul>
     <form method="dialog"><button class="button" type="submit">닫기</button></form>
   </dialog>
 
   <dialog id="reboot-dialog" class="dialog">
-    <h2>Reboot할까요?</h2>
-    <p>보유 요청, 서버, 업그레이드가 초기화됩니다. 토큰 <strong id="reboot-gain">0</strong>개를 얻고, 업적과 운영 레벨은 유지됩니다.</p>
+    <h2>월드를 Reboot할까요?</h2>
+    <p>보유 요청, 서버, 업그레이드가 초기화되고 공개 월드에도 반영됩니다. 토큰 <strong id="reboot-gain">0</strong>개를 얻고, 업적과 운영 레벨은 유지됩니다.</p>
     <div class="dialog-actions">
       <button id="reboot-cancel" class="button" type="button">취소</button>
       <button id="reboot-confirm" class="button danger" type="button">Reboot</button>
@@ -220,8 +222,8 @@
   </dialog>
 
   <dialog id="reset-dialog" class="dialog">
-    <h2>진행을 완전히 초기화할까요?</h2>
-    <p>서버에 저장된 요청, 서버, 업그레이드, 토큰, 업적, 레벨이 모두 삭제됩니다. 되돌릴 수 없습니다.</p>
+    <h2>공유 월드를 초기화할까요?</h2>
+    <p>요청, 서버, 업그레이드, 토큰, 업적, 레벨이 모두 초기화되고 공개 월드에도 즉시 반영됩니다. 되돌릴 수 없습니다.</p>
     <div class="dialog-actions">
       <button id="reset-cancel" class="button" type="button">취소</button>
       <button id="reset-confirm" class="button danger" type="button">모두 삭제</button>

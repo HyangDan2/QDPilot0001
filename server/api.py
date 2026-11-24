@@ -1,8 +1,13 @@
-"""Minimal HTTP API for HD2Lab Idle Ops (stdlib only).
+"""HTTP API for HD2Lab Idle Ops (stdlib only).
 
-In production Nginx terminates HTTPS, enforces the admin SSO and proxies
-`/admin/idle-ops/api/` to a Unix socket. This module trusts the
-`X-HD2Lab-User` header, which only Nginx can set on that socket.
+Production topology:
+  * Nginx terminates HTTPS and enforces admin SSO on ``/admin/idle-ops/``.
+    Only that path may apply actions; the trusted ``X-HD2Lab-User`` header is
+    forwarded there.
+  * ``/idle-ops/`` is the public, read-only world viewer. It can only read
+    state; the public API rejects every write method.
+
+The shared world is advanced lazily inside the store on every read.
 """
 
 from __future__ import annotations
@@ -14,12 +19,14 @@ import sqlite3
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import economy
 
-BASE_PATH = "/admin/idle-ops"
-API_PATH = BASE_PATH + "/api/v1"
+ADMIN_BASE = "/admin/idle-ops"
+ADMIN_API = ADMIN_BASE + "/api/v1"
+PUBLIC_BASE = "/idle-ops"
+PUBLIC_API = PUBLIC_BASE + "/api/v1"
 MAX_BODY = 8 * 1024
 OP_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 ACTION_TYPES = {"buyServer", "buyUpgrade", "reboot", "reset"}
@@ -46,8 +53,6 @@ def public_state(state):
         "upgrades": state["upgrades"],
         "achievements": state["achievements"],
         "created_at": state["created_at"],
-        "last_sim_at": state["last_sim_at"],
-        "last_seen": state["last_seen"],
     }
 
 
@@ -62,15 +67,18 @@ def build_payload(result, now):
         "awaySeconds": result.away_seconds,
         "message": result.message,
         "duplicate": result.duplicate,
+        "events": result.events,
+        "cursor": result.cursor,
     }
 
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "HD2LabIdleOps/1.0"
+    server_version = "HD2LabIdleOps/1.1"
     store = None
     dev_user = None
     static_root = None
+    public_root = None
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
@@ -116,50 +124,87 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("body must be a JSON object")
         return value
 
+    @staticmethod
+    def _since(url):
+        values = parse_qs(urlsplit(url).query).get("since")
+        if not values:
+            return None
+        try:
+            return max(0, int(values[0]))
+        except (TypeError, ValueError):
+            return None
+
     def do_GET(self):
-        path = urlsplit(self.path).path
-        if path == BASE_PATH:
-            self.send_response(308)
-            self.send_header("Location", BASE_PATH + "/")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
+        url = self.path
+        path = urlsplit(url).path
+        if path == ADMIN_BASE:
+            self._redirect(ADMIN_BASE + "/")
             return
-        if path == API_PATH + "/health/ready":
+        if path == PUBLIC_BASE:
+            self._redirect(PUBLIC_BASE + "/")
+            return
+        if path == ADMIN_API + "/health/ready":
             self._json(200, {"status": "ok", "service": "idle-ops"})
             return
-        if path == API_PATH + "/state":
-            self._handle_state()
+        if path == ADMIN_API + "/state":
+            self._handle_state(public=False)
             return
-        if self.static_root is not None:
-            self._serve_static(path)
+        if path == PUBLIC_API + "/state":
+            self._handle_state(public=True)
+            return
+        if path.startswith(ADMIN_API + "/") or path.startswith(PUBLIC_API + "/"):
+            self._json(404, {"detail": "not found"})
+            return
+        if path.startswith(ADMIN_BASE + "/") and self.static_root is not None:
+            self._serve_static(path, ADMIN_BASE, self.static_root)
+            return
+        if path.startswith(PUBLIC_BASE + "/") and self.public_root is not None:
+            self._serve_static(path, PUBLIC_BASE, self.public_root)
             return
         self._json(404, {"detail": "not found"})
 
     def do_HEAD(self):
-        if self.static_root is not None and urlsplit(self.path).path.startswith(BASE_PATH + "/"):
-            self._serve_static(urlsplit(self.path).path)
+        path = urlsplit(self.path).path
+        if path.startswith(ADMIN_BASE + "/") and self.static_root is not None:
+            self._serve_static(path, ADMIN_BASE, self.static_root)
+            return
+        if path.startswith(PUBLIC_BASE + "/") and self.public_root is not None:
+            self._serve_static(path, PUBLIC_BASE, self.public_root)
             return
         self._json(404, {"detail": "not found"})
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        if path == API_PATH + "/actions":
+        if path == ADMIN_API + "/actions":
             self._handle_action()
             return
-        if path == API_PATH + "/reset":
+        if path == ADMIN_API + "/reset":
             self._handle_action(reset=True)
+            return
+        if path.startswith(PUBLIC_API + "/"):
+            self.close_connection = True
+            self.send_response(405)
+            self.send_header("Allow", "GET, HEAD")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
             return
         self.close_connection = True
         self._json(404, {"detail": "not found"})
 
-    def _handle_state(self):
-        user = self._username()
-        if not user:
+    def _redirect(self, location):
+        self.send_response(308)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _handle_state(self, public=False):
+        user = "" if public else self._username()
+        if not public and not user:
             self._json(401, {"detail": "admin authentication required"})
             return
         now = time.time()
         try:
-            result = self.store.session(user, now)
+            result = self.store.world(now, actor=user, since=self._since(self.path))
         except (ValueError, sqlite3.Error) as exc:
             self._error(exc)
             return
@@ -190,9 +235,12 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(op_id, str) or not OP_ID.fullmatch(op_id):
             self._json(400, {"detail": "invalid opId"})
             return
+        since = body.get("since")
+        if not isinstance(since, int) or isinstance(since, bool) or since < 0:
+            since = None
         now = time.time()
         try:
-            result = self.store.session(user, now, action=action, op_id=op_id)
+            result = self.store.world(now, action=action, op_id=op_id, actor=user, since=since)
         except ValueError as exc:
             self._json(400, {"detail": str(exc)})
             return
@@ -205,11 +253,8 @@ class Handler(BaseHTTPRequestHandler):
         self.log_message("error: %s", exc)
         self._json(500, {"detail": "internal error"})
 
-    def _serve_static(self, path):
-        prefix = BASE_PATH + "/"
-        if not path.startswith(prefix):
-            self._json(404, {"detail": "not found"})
-            return
+    def _serve_static(self, path, base, root_dir):
+        prefix = base + "/"
         relative = unquote(path[len(prefix):]) or "index.html"
         if relative.endswith("/"):
             relative += "index.html"
@@ -220,8 +265,8 @@ class Handler(BaseHTTPRequestHandler):
         if extension not in CONTENT_TYPES:
             self._json(404, {"detail": "not found"})
             return
-        target = os.path.realpath(os.path.join(self.static_root, relative))
-        root = os.path.realpath(self.static_root)
+        target = os.path.realpath(os.path.join(root_dir, relative))
+        root = os.path.realpath(root_dir)
         if not target.startswith(root + os.sep) or not os.path.isfile(target):
             self._json(404, {"detail": "not found"})
             return
@@ -237,11 +282,16 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
-def make_handler(store, dev_user=None, static_root=None):
+def make_handler(store, dev_user=None, static_root=None, public_root=None):
     return type(
         "BoundHandler",
         (Handler,),
-        {"store": store, "dev_user": dev_user, "static_root": static_root},
+        {
+            "store": store,
+            "dev_user": dev_user,
+            "static_root": static_root,
+            "public_root": public_root,
+        },
     )
 
 

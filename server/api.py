@@ -73,6 +73,10 @@ def build_payload(result, now):
     }
 
 
+def _reject_json_constant(token):
+    raise ValueError(f"invalid JSON constant: {token}")
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "HD2LabIdleOps/1.1"
@@ -92,7 +96,7 @@ class Handler(BaseHTTPRequestHandler):
         return address or "unix"
 
     def _json(self, code, payload):
-        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -125,7 +129,7 @@ class Handler(BaseHTTPRequestHandler):
             raise OverflowError("request body too large")
         raw = self.rfile.read(length)
         try:
-            value = json.loads(raw.decode("utf-8"))
+            value = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("invalid JSON") from exc
         if not isinstance(value, dict):

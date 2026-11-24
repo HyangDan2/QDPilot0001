@@ -1,5 +1,6 @@
 """Deterministic tests for the Idle Ops economy."""
 
+import json
 import math
 import unittest
 
@@ -155,6 +156,67 @@ class ClockTests(unittest.TestCase):
         self.assertEqual(info["clock"], "resync")
         self.assertEqual(info["seconds"], 0.0)
         self.assertEqual(state["total_lifetime"], settled)
+
+
+class NumericSafetyTests(unittest.TestCase):
+    def test_normalize_rejects_non_finite_and_overflow(self):
+        for field, value in (
+            ("requests", float("inf")),
+            ("requests", float("nan")),
+            ("total_lifetime", -1),
+            ("total_lifetime", economy.MAX_STATE_VALUE + 1),
+            ("tokens", -2),
+            ("last_sim_at", float("inf")),
+        ):
+            raw = economy.initial_state(NOW)
+            raw[field] = value
+            with self.assertRaises(ValueError, msg=f"{field}={value}"):
+                economy.normalize_state(raw)
+
+    def test_normalize_rejects_oversized_rack_counts(self):
+        raw = economy.initial_state(NOW)
+        raw["servers"] = {"cache": economy.MAX_SERVERS_PER_TIER + 1}
+        with self.assertRaises(ValueError):
+            economy.normalize_state(raw)
+
+    def test_advance_saturates_at_the_safe_ceiling(self):
+        state = fresh(
+            requests=economy.MAX_STATE_VALUE - 10,
+            total_lifetime=economy.MAX_STATE_VALUE - 10,
+            run_lifetime=economy.MAX_STATE_VALUE - 10,
+            servers={"cache": economy.MAX_SERVERS_PER_TIER},
+        )
+        gains = economy.advance(state, NOW + 3600)
+        self.assertEqual(state["total_lifetime"], economy.MAX_STATE_VALUE)
+        self.assertEqual(state["run_lifetime"], economy.MAX_STATE_VALUE)
+        self.assertTrue(math.isfinite(state["requests"]))
+        self.assertTrue(math.isfinite(gains["requests"]))
+        later = economy.advance(state, NOW + 7200)
+        self.assertEqual(state["total_lifetime"], economy.MAX_STATE_VALUE)
+        self.assertEqual(state["requests"], economy.MAX_STATE_VALUE)
+        self.assertTrue(math.isfinite(later["requests"]))
+
+    def test_buy_rejects_rack_limit_and_bad_types(self):
+        state = fresh(requests=1e18, servers={"cache": economy.MAX_SERVERS_PER_TIER})
+        with self.assertRaises(ValueError):
+            economy.apply_action(state, {"type": "buyServer", "tier": "cache", "qty": 1})
+        for tier in (123, ["cache"], None):
+            with self.assertRaises(ValueError):
+                economy.apply_action(state, {"type": "buyServer", "tier": tier, "qty": 1})
+        with self.assertRaises(ValueError):
+            economy.apply_action(state, {"type": "buyUpgrade", "id": ["network"]})
+
+    def test_reboot_caps_tokens(self):
+        state = fresh(
+            run_lifetime=1e12,
+            tokens=int(economy.MAX_STATE_VALUE) - 1,
+        )
+        economy.apply_action(state, {"type": "reboot"})
+        self.assertEqual(state["tokens"], int(economy.MAX_STATE_VALUE))
+
+    def test_state_serializes_without_nan(self):
+        state = fresh(total_lifetime=economy.MAX_STATE_VALUE, requests=economy.MAX_STATE_VALUE)
+        json.dumps(state, allow_nan=False)
 
 
 class AdvanceTests(unittest.TestCase):

@@ -20,6 +20,10 @@ MAX_SIM_SECONDS = 100 * 365 * 86400.0
 CLOCK_REWIND_TOLERANCE = 300.0
 # A stored timestamp further ahead than this is considered a corrupt clock.
 MAX_FUTURE_SKEW = 24 * 3600.0
+# Stored counters stay inside the JavaScript safe-integer range (2^53 - 1), so
+# the browser never sees a value it cannot represent exactly.
+MAX_STATE_VALUE = 9_007_199_254_740_991.0
+MAX_SERVERS_PER_TIER = 1_000_000
 MAX_BUY = 1000
 
 TIERS = [
@@ -75,6 +79,8 @@ MAX_SETTLE_SEGMENTS = 100_000
 
 
 def _tier(tier_id):
+    if not isinstance(tier_id, str):
+        raise ValueError("invalid tier")
     for tier in TIERS:
         if tier["id"] == tier_id:
             return tier
@@ -82,20 +88,30 @@ def _tier(tier_id):
 
 
 def _upgrade(upgrade_id):
+    if not isinstance(upgrade_id, str):
+        raise ValueError("invalid upgrade")
     try:
         return UPGRADES[upgrade_id]
     except KeyError as exc:
         raise ValueError(f"unknown upgrade: {upgrade_id}") from exc
 
 
-def _num(value, floor=0.0):
+def _num(value, floor=0.0, ceiling=MAX_STATE_VALUE):
     try:
         number = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError("corrupt numeric state") from exc
-    if not math.isfinite(number) or number < floor:
+    if not math.isfinite(number) or number < floor or number > ceiling:
         raise ValueError("corrupt numeric state")
     return number
+
+
+def _add(value, chunk):
+    """Add a production chunk without ever leaving the safe range."""
+    total = value + chunk
+    if not math.isfinite(total) or total > MAX_STATE_VALUE:
+        return MAX_STATE_VALUE
+    return total
 
 
 def initial_state(now):
@@ -119,7 +135,10 @@ def normalize_state(raw):
     """Validate a stored state and fill defaults. Raises ValueError if corrupt."""
     if not isinstance(raw, dict):
         raise ValueError("state must be an object")
-    version = int(raw.get("version", 0))
+    try:
+        version = int(raw.get("version", 0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("corrupt state version") from exc
     if version != SAVE_VERSION:
         raise ValueError(f"unsupported state version: {version}")
     state = {
@@ -141,8 +160,8 @@ def normalize_state(raw):
         raise ValueError("servers must be an object")
     for tier in TIERS:
         count = servers.get(tier["id"], 0)
-        count = int(_num(count))
-        if count < 0 or count > 1_000_000:
+        count = int(_num(count, ceiling=MAX_SERVERS_PER_TIER))
+        if count < 0 or count > MAX_SERVERS_PER_TIER:
             raise ValueError("server count out of range")
         if count:
             state["servers"][tier["id"]] = count
@@ -167,9 +186,16 @@ def total_servers(state):
     return sum(state["servers"].values())
 
 
+def _price(base, growth, owned):
+    try:
+        return int(math.ceil(base * (growth ** int(owned))))
+    except OverflowError:
+        return int(MAX_STATE_VALUE)
+
+
 def server_cost(tier_id, owned):
     tier = _tier(tier_id)
-    return int(math.ceil(tier["cost"] * (tier["growth"] ** int(owned))))
+    return _price(tier["cost"], tier["growth"], owned)
 
 
 def bulk_cost(tier_id, owned, qty):
@@ -190,7 +216,7 @@ def max_affordable(tier_id, owned, budget, cap=MAX_BUY):
 
 def upgrade_cost(upgrade_id, level):
     spec = _upgrade(upgrade_id)
-    return int(math.ceil(spec["cost"] * (spec["growth"] ** int(level))))
+    return _price(spec["cost"], spec["growth"], level)
 
 
 def level_for(total_lifetime):
@@ -379,12 +405,16 @@ def advance(state, now):
                 break
             continue
         chunk = rate * dt
-        if not math.isfinite(chunk):
+        if not math.isfinite(chunk) or chunk < 0.0:
             chunk = 0.0
+        chunk = min(chunk, MAX_STATE_VALUE)
         earned += chunk
-        state["requests"] += chunk
-        state["run_lifetime"] += chunk
-        state["total_lifetime"] += chunk
+        state["requests"] = _add(state["requests"], chunk)
+        state["run_lifetime"] = _add(state["run_lifetime"], chunk)
+        state["total_lifetime"] = _add(state["total_lifetime"], chunk)
+        if state["total_lifetime"] >= MAX_STATE_VALUE:
+            remaining = 0.0
+            break
         remaining -= dt
         if boundary is not None and abs(state["total_lifetime"] - boundary) <= THRESHOLD_EPSILON:
             state["total_lifetime"] = boundary
@@ -394,11 +424,11 @@ def advance(state, now):
         # current rate rather than burning unbounded CPU. Normal worlds never hit this.
         rate = rps(state)
         if math.isfinite(rate) and rate > 0.0:
-            chunk = rate * remaining
+            chunk = min(rate * remaining, MAX_STATE_VALUE)
             earned += chunk
-            state["requests"] += chunk
-            state["run_lifetime"] += chunk
-            state["total_lifetime"] += chunk
+            state["requests"] = _add(state["requests"], chunk)
+            state["run_lifetime"] = _add(state["run_lifetime"], chunk)
+            state["total_lifetime"] = _add(state["total_lifetime"], chunk)
             remaining = 0.0
     if resync:
         state["last_sim_at"] = float(now)
@@ -495,6 +525,8 @@ def apply_action(state, action, now=None):
         tier_id = action.get("tier")
         _tier(tier_id)
         owned = state["servers"].get(tier_id, 0)
+        if owned >= MAX_SERVERS_PER_TIER:
+            raise ValueError("server limit reached")
         qty = action.get("qty", 1)
         if qty == "max":
             qty, cost = max_affordable(tier_id, owned, state["requests"])
@@ -506,12 +538,16 @@ def apply_action(state, action, now=None):
                 raise ValueError("not enough requests")
         else:
             raise ValueError("qty must be 1, 10, or max")
+        if owned + qty > MAX_SERVERS_PER_TIER:
+            raise ValueError("server limit reached")
         state["requests"] -= cost
         state["servers"][tier_id] = owned + qty
         name = _tier(tier_id)["name"]
         return {"type": "buyServer", "tier": tier_id, "message": f"{name} {qty}대를 설치했습니다.", "qty": qty, "cost": cost}
     if kind == "buyUpgrade":
         upgrade_id = action.get("id")
+        if not isinstance(upgrade_id, str):
+            raise ValueError("invalid upgrade")
         spec = _upgrade(upgrade_id)
         level = state["upgrades"].get(upgrade_id, 0)
         if level >= spec["max"]:
@@ -527,8 +563,8 @@ def apply_action(state, action, now=None):
         gain = prestige_tokens(state["run_lifetime"])
         if gain < 1:
             raise ValueError("reboot is not available yet")
-        state["tokens"] += gain
-        state["reboots"] += 1
+        state["tokens"] = min(state["tokens"] + gain, int(MAX_STATE_VALUE))
+        state["reboots"] = min(state["reboots"] + 1, int(MAX_STATE_VALUE))
         state["requests"] = SEED_REQUESTS
         state["run_lifetime"] = 0.0
         state["servers"] = {"cache": 1}

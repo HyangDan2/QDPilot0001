@@ -227,6 +227,22 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
 
+    def test_json_constants_are_rejected(self):
+        for token in ("NaN", "Infinity", "-Infinity"):
+            raw = '{"opId":"op_nan_0001","action":{"type":"buyServer","tier":"cache","qty":1},"x":%s}' % token
+            status, _, body = self.call("POST", ADMIN + "/api/v1/actions", raw_body=raw, user="buyer")
+            self.assertEqual(status, 400, msg=token)
+            self.assertIn("invalid JSON", body["detail"])
+
+    def test_non_string_tier_is_a_client_error(self):
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/actions",
+            body={"opId": "op_bad_tier_1", "action": {"type": "buyServer", "tier": 5, "qty": 1}},
+            user="buyer",
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("tier", body["detail"])
+
     def test_unauthorised_action(self):
         status, _, _ = self.call(
             "POST", ADMIN + "/api/v1/actions",

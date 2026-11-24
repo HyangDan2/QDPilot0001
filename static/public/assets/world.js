@@ -86,12 +86,19 @@ let receivedWall = Date.now();
 let serverNow = 0;
 
 function compact(value) {
-  const n = Number(value) || 0;
-  if (n >= 1e12) return trimDecimal(n / 1e12, 1) + "조";
-  if (n >= 1e8) return trimDecimal(n / 1e8, 1) + "억";
-  if (n >= 1e4) return trimDecimal(n / 1e4, 1) + "만";
-  if (n >= 100) return Math.round(n).toLocaleString("ko-KR");
-  return trimDecimal(n, n < 10 ? 1 : 0);
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "–";
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  for (const [size, suffix] of [[1e12, "조"], [1e8, "억"], [1e4, "만"]]) {
+    if (abs >= size) {
+      const scaled = abs / size;
+      const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
+      return sign + trimDecimal(scaled, digits) + suffix;
+    }
+  }
+  if (abs >= 100) return sign + Math.round(abs).toLocaleString("ko-KR");
+  return sign + trimDecimal(abs, abs < 10 ? 1 : 0);
 }
 
 function trimDecimal(value, digits) {

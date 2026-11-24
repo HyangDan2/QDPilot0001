@@ -119,11 +119,9 @@ function trimNumber(text) {
 }
 
 const COMPACT = [
-  [1e15, "Qa"],
-  [1e12, "T"],
-  [1e9, "B"],
-  [1e6, "M"],
-  [1e3, "K"],
+  [1e12, "조"],
+  [1e8, "억"],
+  [1e4, "만"],
 ];
 
 function fmt(value) {

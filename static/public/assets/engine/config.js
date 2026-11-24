@@ -35,8 +35,8 @@ export const MOTION = {
   speedRatio: 0.32,
   hopHz: 12,
   dustHz: 0.09,
-  attackSeconds: 0.52,
-  repairSeconds: 0.55,
+  attackSeconds: 0.75,
+  repairSeconds: 0.8,
   bugSpawn: [6.5, 12.5],
   bugSpeed: [10, 34],
 };

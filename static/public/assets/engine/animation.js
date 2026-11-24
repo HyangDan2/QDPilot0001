@@ -8,10 +8,10 @@
 export const STATES = {
   idle:    { frames: 8,  fps: 8,  loop: true,  seconds: 1.0 },
   run:     { frames: 12, fps: 12, loop: true,  seconds: 1.0 },
-  attack:  { frames: 12, fps: 16, loop: false, seconds: 0.52, hitFrame: 6 },
-  repair:  { frames: 8,  fps: 10, loop: true,  seconds: 1.0 },
-  levelup: { frames: 12, fps: 12, loop: false, seconds: 0.9 },
-  install: { frames: 12, fps: 12, loop: false, seconds: 0.6 },
+  attack:  { frames: 12, fps: 16, loop: false, seconds: 0.75, hitFrame: 6 },
+  repair:  { frames: 8,  fps: 10, loop: true,  seconds: 0.8 },
+  levelup: { frames: 12, fps: 12, loop: false, seconds: 1.0 },
+  install: { frames: 12, fps: 12, loop: false, seconds: 1.0 },
 };
 
 export const HERO_STATES = Object.keys(STATES);

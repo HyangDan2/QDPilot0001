@@ -42,19 +42,31 @@ UPGRADES = {
 }
 
 ACHIEVEMENTS = [
-    {"id": "first_server", "name": "첫 랙 설치", "desc": "서버를 1대 보유합니다.", "bonus": 0.02},
-    {"id": "ten_servers", "name": "작은 클러스터", "desc": "서버 10대를 동시에 보유합니다.", "bonus": 0.02},
-    {"id": "rps_100", "name": "워밍 캐시", "desc": "기본 RPS 100을 달성합니다.", "bonus": 0.03},
-    {"id": "rps_10k", "name": "트래픽 폭주", "desc": "기본 RPS 10,000을 달성합니다.", "bonus": 0.03},
-    {"id": "lifetime_1m", "name": "백만 요청", "desc": "누적 100만 요청을 처리합니다.", "bonus": 0.04},
-    {"id": "level_10", "name": "시니어 오퍼레이터", "desc": "운영 레벨 10에 도달합니다.", "bonus": 0.03},
-    {"id": "first_reboot", "name": "클린 재시작", "desc": "첫 Reboot를 완료합니다.", "bonus": 0.05},
-    {"id": "tokens_10", "name": "업타임 수집가", "desc": "가동 토큰 10개를 보유합니다.", "bonus": 0.05},
+    {"id": "first_server", "name": "첫 랙 설치", "desc": "서버를 1대 보유합니다.", "bonus": 0.02,
+     "metric": "servers", "at": 1},
+    {"id": "ten_servers", "name": "작은 클러스터", "desc": "서버 10대를 동시에 보유합니다.", "bonus": 0.02,
+     "metric": "servers", "at": 10},
+    {"id": "rps_100", "name": "워밍 캐시", "desc": "기본 RPS 100을 달성합니다.", "bonus": 0.03,
+     "metric": "base_rps", "at": 100},
+    {"id": "rps_10k", "name": "트래픽 폭주", "desc": "기본 RPS 10,000을 달성합니다.", "bonus": 0.03,
+     "metric": "base_rps", "at": 10_000},
+    {"id": "lifetime_1m", "name": "백만 요청", "desc": "누적 100만 요청을 처리합니다.", "bonus": 0.04,
+     "metric": "total_lifetime", "at": 1_000_000},
+    {"id": "level_10", "name": "시니어 오퍼레이터", "desc": "운영 레벨 10에 도달합니다.", "bonus": 0.03,
+     "metric": "level", "at": 10},
+    {"id": "first_reboot", "name": "클린 재시작", "desc": "첫 Reboot를 완료합니다.", "bonus": 0.05,
+     "metric": "reboots", "at": 1},
+    {"id": "tokens_10", "name": "업타임 수집가", "desc": "가동 토큰 10개를 보유합니다.", "bonus": 0.05,
+     "metric": "tokens", "at": 10},
 ]
 
 BASE_COOLING = 10.0
 COOLING_PER_LEVEL = 6.0
 LEVEL_STEP = 10_000.0
+# Settlement is segmented at production-changing thresholds (levels and
+# lifetime achievements), so polling frequency cannot change the outcome.
+THRESHOLD_EPSILON = 1e-6
+MAX_SETTLE_SEGMENTS = 100_000
 
 
 def _tier(tier_id):
@@ -252,56 +264,120 @@ def prestige_tokens(run_lifetime):
     return int(math.floor(math.sqrt(run_lifetime / REBOOT_THRESHOLD)))
 
 
-def check_achievements(state):
+def check_achievements(state, info=None):
     unlocked = set(state["achievements"])
     gained = []
-    info = derived(state)
-    base = info["base_rps"]
+    info = info or derived(state)
+    metrics = {
+        "servers": total_servers(state),
+        "base_rps": info["base_rps"],
+        "total_lifetime": state["total_lifetime"],
+        "level": info["level"],
+        "reboots": state["reboots"],
+        "tokens": state["tokens"],
+    }
     for item in ACHIEVEMENTS:
         if item["id"] in unlocked:
             continue
-        hit = False
-        if item["id"] == "first_server":
-            hit = total_servers(state) >= 1
-        elif item["id"] == "ten_servers":
-            hit = total_servers(state) >= 10
-        elif item["id"] == "rps_100":
-            hit = base >= 100
-        elif item["id"] == "rps_10k":
-            hit = base >= 10_000
-        elif item["id"] == "lifetime_1m":
-            hit = state["total_lifetime"] >= 1_000_000
-        elif item["id"] == "level_10":
-            hit = info["level"] >= 10
-        elif item["id"] == "first_reboot":
-            hit = state["reboots"] >= 1
-        elif item["id"] == "tokens_10":
-            hit = state["tokens"] >= 10
-        if hit:
+        if metrics[item["metric"]] >= item["at"]:
             state["achievements"].append(item["id"])
             unlocked.add(item["id"])
             gained.append(item["id"])
     return gained
 
 
+def _next_level_total(state):
+    level = level_for(state["total_lifetime"])
+    return float(level * level) * LEVEL_STEP
+
+
+def _next_production_threshold(state):
+    """Earliest lifetime total where RPS can change, or None."""
+    unlocked = set(state["achievements"])
+    boundary = _next_level_total(state)
+    for item in ACHIEVEMENTS:
+        if item["id"] in unlocked:
+            continue
+        if item["metric"] == "total_lifetime":
+            boundary = min(boundary, float(item["at"]))
+        elif item["metric"] == "level":
+            boundary = min(boundary, float((item["at"] - 1) ** 2) * LEVEL_STEP)
+    return boundary
+
+
 def advance(state, now):
-    """Apply elapsed time since the last simulation. No absence cap."""
-    elapsed = max(0.0, min(float(now) - state["last_sim_at"], MAX_SIM_SECONDS))
+    """Apply elapsed time since the last simulation. No absence cap above the guard.
+
+    The interval is settled in segments bounded by level/achievement thresholds,
+    so the result depends on the starting state and elapsed time, not on how many
+    times the world was polled in between.
+    """
+    raw_elapsed = float(now) - state["last_sim_at"]
+    elapsed = max(0.0, min(raw_elapsed, MAX_SIM_SECONDS))
     level_before = level_for(state["total_lifetime"])
-    earned = rps(state) * elapsed
-    if earned:
-        state["requests"] += earned
-        state["run_lifetime"] += earned
-        state["total_lifetime"] += earned
-    # A backwards clock (or a far-future timestamp) must not block progression.
+    gained = []
+
+    def unlock():
+        for achievement_id in check_achievements(state):
+            if achievement_id not in gained:
+                gained.append(achievement_id)
+
+    # Achievements already satisfied by the starting state apply from the start
+    # of the interval, matching an admin action that unlocked them immediately.
+    unlock()
+    earned = 0.0
+    remaining = elapsed
+    segments = 0
+    while remaining > 0.0 and segments < MAX_SETTLE_SEGMENTS:
+        segments += 1
+        rate = rps(state)
+        if not math.isfinite(rate) or rate < 0.0:
+            rate = 0.0
+        boundary = _next_production_threshold(state)
+        dt = remaining
+        if boundary is not None:
+            if rate <= 0.0:
+                dt = 0.0
+            else:
+                dt = min(dt, max(0.0, (boundary - state["total_lifetime"]) / rate))
+        if dt <= 0.0:
+            before = len(state["achievements"])
+            unlock()
+            if len(state["achievements"]) == before:
+                # Defensive: never spin on a stale threshold.
+                break
+            continue
+        chunk = rate * dt
+        if not math.isfinite(chunk):
+            chunk = 0.0
+        earned += chunk
+        state["requests"] += chunk
+        state["run_lifetime"] += chunk
+        state["total_lifetime"] += chunk
+        remaining -= dt
+        if boundary is not None and abs(state["total_lifetime"] - boundary) <= THRESHOLD_EPSILON:
+            state["total_lifetime"] = boundary
+        unlock()
+    if remaining > 0.0:
+        # Extreme guard only (100y at absurd rates): settle the remainder at the
+        # current rate rather than burning unbounded CPU. Normal worlds never hit this.
+        rate = rps(state)
+        if math.isfinite(rate) and rate > 0.0:
+            chunk = rate * remaining
+            earned += chunk
+            state["requests"] += chunk
+            state["run_lifetime"] += chunk
+            state["total_lifetime"] += chunk
+            remaining = 0.0
     state["last_sim_at"] = float(now)
-    unlocked = check_achievements(state)
+    unlock()
     return {
         "seconds": elapsed,
         "requests": earned,
         "level_from": level_before,
         "level_to": level_for(state["total_lifetime"]),
-        "achievements": unlocked,
+        "achievements": gained,
+        "segments": segments,
     }
 
 

@@ -105,6 +105,7 @@ class ProgressionTests(unittest.TestCase):
 class AdvanceTests(unittest.TestCase):
     def test_elapsed_time_earns_requests(self):
         state = fresh()
+        economy.advance(state, NOW)  # settle the starting state (first_server)
         rate = economy.rps(state)
         gains = economy.advance(state, NOW + 100)
         self.assertAlmostEqual(gains["seconds"], 100.0)
@@ -145,6 +146,58 @@ class AdvanceTests(unittest.TestCase):
         self.assertTrue(cache["can_afford"])
         self.assertFalse(snapshot["reboot"]["available"])
         self.assertEqual(len(snapshot["achievements"]), len(economy.ACHIEVEMENTS))
+
+
+class SettlementFrequencyTests(unittest.TestCase):
+    """Same start state and elapsed time must not depend on polling cadence."""
+
+    @staticmethod
+    def build_state():
+        return fresh(
+            requests=0.0,
+            total_lifetime=795_000.0,
+            servers={"cache": 4, "app": 3, "db": 1},
+            upgrades={"network": 1, "cooling": 2},
+        )
+
+    def integrate(self, seconds, interval):
+        state = self.build_state()
+        now = NOW
+        for _ in range(int(round(seconds / interval))):
+            now += interval
+            economy.advance(state, now)
+        return state
+
+    def assert_equivalent(self, expected, actual):
+        for key in ("requests", "run_lifetime", "total_lifetime"):
+            limit = max(1e-6, 1e-9 * max(abs(expected[key]), abs(actual[key])))
+            self.assertLessEqual(abs(expected[key] - actual[key]), limit, key)
+        for key in ("tokens", "reboots", "servers", "upgrades", "achievements"):
+            self.assertEqual(actual[key], expected[key], key)
+        self.assertEqual(
+            economy.level_for(actual["total_lifetime"]),
+            economy.level_for(expected["total_lifetime"]),
+        )
+
+    def test_fine_intervals_match_a_single_hour_intervals(self):
+        bulk = self.integrate(6 * 3600, 6 * 3600)
+        self.assertGreater(bulk["total_lifetime"], 1_000_000)
+        self.assertIn("level_10", bulk["achievements"])
+        self.assertIn("lifetime_1m", bulk["achievements"])
+        for interval in (1, 8, 15):
+            self.assert_equivalent(bulk, self.integrate(6 * 3600, interval))
+
+    def test_coarse_intervals_match_a_month_bulk_settlement(self):
+        bulk = self.integrate(30 * 86400, 30 * 86400)
+        for interval in (15, 3600, 86400):
+            self.assert_equivalent(bulk, self.integrate(30 * 86400, interval))
+
+    def test_advance_reports_segmented_settlement(self):
+        state = self.build_state()
+        gains = economy.advance(state, NOW + 6 * 3600)
+        self.assertGreater(gains["segments"], 5)
+        self.assertEqual(gains["level_from"], 9)
+        self.assertGreater(gains["level_to"], gains["level_from"])
 
 
 class ActionTests(unittest.TestCase):

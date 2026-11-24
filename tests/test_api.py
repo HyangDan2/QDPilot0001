@@ -3,12 +3,14 @@
 import http.client
 import json
 import os
+import socket
+import socketserver
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 
-from http.server import ThreadingHTTPServer
+from http.server import HTTPServer, ThreadingHTTPServer
 
 from server.api import make_handler
 from server.store import Store
@@ -16,6 +18,16 @@ from server.store import Store
 ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "static"
 USER = "hd2service"
+
+
+class UnixHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
+    address_family = socket.AF_UNIX
+    daemon_threads = True
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "unix"
+        self.server_port = 0
 
 
 class ApiTests(unittest.TestCase):
@@ -180,6 +192,54 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status, 404)
         status, _, _ = self.call("GET", "/admin/idle-ops/assets/../../server/api.py")
         self.assertEqual(status, 404)
+
+
+class UnixSocketTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(os.path.join(self.tmp.name, "unix.sqlite3"))
+        self.socket_path = os.path.join(self.tmp.name, "api.sock")
+        handler = make_handler(self.store, dev_user=None, static_root=str(STATIC))
+        self.server = UnixHTTPServer(self.socket_path, handler)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.tmp.cleanup()
+
+    def request(self, path, user=None):
+        lines = ["GET %s HTTP/1.1" % path, "Host: localhost", "Connection: close"]
+        if user:
+            lines.append("X-HD2Lab-User: %s" % user)
+        raw = ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(5)
+        client.connect(self.socket_path)
+        client.sendall(raw)
+        data = b""
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        client.close()
+        return data
+
+    def test_serves_over_unix_socket(self):
+        data = self.request("/admin/idle-ops/api/v1/health/ready")
+        self.assertIn(b"HTTP/1.1 200", data)
+        self.assertIn(b'"status":"ok"', data)
+
+    def test_unauthenticated_over_unix_socket(self):
+        data = self.request("/admin/idle-ops/api/v1/state")
+        self.assertIn(b"HTTP/1.1 401", data)
+
+    def test_static_over_unix_socket(self):
+        data = self.request("/admin/idle-ops/")
+        self.assertIn(b"HTTP/1.1 200", data)
+        self.assertIn(b"Idle Ops", data)
 
 
 if __name__ == "__main__":

@@ -75,6 +75,12 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
+    def address_string(self):
+        address = self.client_address
+        if isinstance(address, tuple):
+            return address[0]
+        return address or "unix"
+
     def _json(self, code, payload):
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         self.send_response(code)

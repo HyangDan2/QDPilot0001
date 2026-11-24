@@ -68,6 +68,16 @@ export class WorldScene {
     return clamp(this.height * 0.085, 42, 80);
   }
 
+  // Wide states (run/attack) are ~0.78× as wide as they are tall; keep the
+  // sprite fully on screen instead of letting big poses clip at the edges.
+  get heroHeight() {
+    return clamp(Math.min(this.height * 0.31, this.width * 0.6), 150, 300);
+  }
+
+  get heroMargin() {
+    return clamp(this.heroHeight * 0.42, 60, 140);
+  }
+
   async loadSprites() {
     try {
       await this.library.load();
@@ -136,8 +146,9 @@ export class WorldScene {
   }
 
   heroSpot() {
+    const margin = this.heroMargin;
     return {
-      x: clamp(this.width * 0.5, 60, this.width - 60),
+      x: clamp(this.width * 0.5, margin, this.width - margin),
       y: this.floorY + Math.min(this.height * 0.16, 96),
     };
   }
@@ -393,7 +404,7 @@ export class WorldScene {
   drawHero(ctx) {
     const hero = this.hero.hero;
     const state = this.hero.artState;
-    const height = clamp(Math.min(this.height * 0.31, this.width * 0.6), 150, 300);
+    const height = this.heroHeight;
     const bob = state === "idle" && this.motion ? Math.sin(this.time * 2.4) * 2.5 : 0;
     const art = this.library.artFor(state);
     ctx.save();

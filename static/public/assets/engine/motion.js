@@ -61,7 +61,8 @@ export class HeroController {
     const scene = this.scene;
     const top = scene.floorY + scene.height * 0.075;
     const bottom = scene.height * 0.88;
-    this.hero.x = clamp(this.hero.x, 40, Math.max(40, scene.width - 40));
+    const margin = scene.heroMargin;
+    this.hero.x = clamp(this.hero.x, margin, Math.max(margin, scene.width - margin));
     this.hero.y = clamp(this.hero.y, top, bottom);
   }
 
@@ -158,11 +159,12 @@ export class HeroController {
   chooseTask() {
     const scene = this.scene;
     const hero = this.hero;
+    const margin = scene.heroMargin;
     const alive = scene.bugs.filter((bug) => bug.state === "alive");
     if (alive.length) {
       const target = pick(alive);
       hero.target = { kind: "bug", ref: target };
-      hero.targetX = target.x;
+      hero.targetX = clamp(target.x, margin, Math.max(margin, scene.width - margin));
       hero.targetY = clamp(target.y + 2, scene.floorY + scene.height * 0.075, scene.height * 0.88);
       this.setMode("run");
       hero.timer = 0;
@@ -171,7 +173,7 @@ export class HeroController {
     const racks = scene.racks.filter((rack) => rack.tier !== "cache");
     const rack = racks.length ? pick(racks) : scene.racks[0];
     hero.target = { kind: "rack", ref: rack };
-    hero.targetX = clamp((rack ? rack.x : scene.width * 0.5) + rand(-30, 30), 40, scene.width - 40);
+    hero.targetX = clamp((rack ? rack.x : scene.width * 0.5) + rand(-30, 30), margin, Math.max(margin, scene.width - margin));
     hero.targetY = clamp((rack ? rack.base : scene.floorY) + rand(30, 70), scene.floorY + 70, scene.height * 0.87);
     this.setMode("run");
     hero.timer = 0;

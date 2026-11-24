@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Dependencies / build (스택 확정 후 조정)
+node_modules/
+dist/
+build/
+coverage/
+
+# IDE
+.idea/
+.vscode/
+*.swp

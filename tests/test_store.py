@@ -193,6 +193,56 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(SchemaTooNew):
             Store(self.path)
 
+    def test_v1_database_upgrades_in_place_and_keeps_the_world(self):
+        state = legacy_state(5000.0)
+        with sqlite3.connect(self.path) as con:
+            con.executescript(
+                """
+                CREATE TABLE world (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    state_json TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                CREATE TABLE world_ops (
+                    op_id TEXT PRIMARY KEY,
+                    created_at REAL NOT NULL
+                ) WITHOUT ROWID;
+                CREATE TABLE world_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at REAL NOT NULL,
+                    kind TEXT NOT NULL,
+                    actor TEXT NOT NULL DEFAULT '',
+                    payload_json TEXT NOT NULL
+                );
+                CREATE TABLE players (
+                    username TEXT PRIMARY KEY,
+                    state_json TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                );
+                CREATE TABLE action_ops (
+                    username TEXT NOT NULL,
+                    op_id TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (username, op_id)
+                ) WITHOUT ROWID;
+                PRAGMA user_version = 1;
+                """
+            )
+            con.execute("INSERT INTO world VALUES (1, ?, ?)", (json.dumps(state), NOW))
+        store = self.open()
+        result = store.world(NOW + 10)
+        self.assertGreaterEqual(result.state["total_lifetime"], 5000.0)
+        with sqlite3.connect(self.path) as con:
+            self.assertEqual(int(con.execute("PRAGMA user_version").fetchone()[0]), SCHEMA_VERSION)
+            self.assertTrue(
+                {"action_json", "result_json"}
+                <= {row[1] for row in con.execute("PRAGMA table_info(world_ops)")}
+            )
+            self.assertTrue(
+                {"admin_seen", "audit_log"}
+                <= {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            )
+
     def test_daily_backups_are_verified_and_pruned(self):
         store = self.open()
         store.world(NOW)

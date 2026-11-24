@@ -14,8 +14,10 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
+from urllib.parse import quote
 
 from . import economy
 
@@ -61,6 +63,9 @@ class Store:
         self.backup_dir = os.fspath(
             backup_dir or os.environ.get("IDLE_OPS_BACKUP_DIR") or os.path.join(parent, "backups")
         )
+        # Bumped on every committed world write; read-only snapshots use it to
+        # invalidate their cache immediately after an admin action.
+        self.generation = 0
         with self._connect() as con:
             con.executescript(
                 """
@@ -133,13 +138,13 @@ class Store:
         state["last_seen"] = float(now)
         con.execute(
             "INSERT INTO world (id, state_json, updated_at) VALUES (1, ?, ?)",
-            (json.dumps(state, ensure_ascii=False, separators=(",", ":")), float(now)),
+            (json.dumps(state, ensure_ascii=False, separators=(",", ":"), allow_nan=False), float(now)),
         )
 
     def _append_event(self, con, now, kind, actor, payload):
         cur = con.execute(
             "INSERT INTO world_events (created_at, kind, actor, payload_json) VALUES (?, ?, ?, ?)",
-            (float(now), kind, actor, json.dumps(payload, ensure_ascii=False, separators=(",", ":"))),
+            (float(now), kind, actor, json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False)),
         )
         return int(cur.lastrowid)
 
@@ -271,7 +276,7 @@ class Store:
                     con.execute(
                         "INSERT INTO audit_log (created_at, actor, action, detail_json) VALUES (?, ?, ?, ?)",
                         (float(now), actor, "hardReset",
-                         json.dumps(before, ensure_ascii=False, separators=(",", ":"))),
+                         json.dumps(before, ensure_ascii=False, separators=(",", ":"), allow_nan=False)),
                     )
                 for achievement_id in economy.check_achievements(state):
                     if achievement_id not in gains["achievements"]:
@@ -284,7 +289,7 @@ class Store:
             con.execute(
                 "INSERT INTO world (id, state_json, updated_at) VALUES (1, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at",
-                (json.dumps(state, ensure_ascii=False, separators=(",", ":")), float(now)),
+                (json.dumps(state, ensure_ascii=False, separators=(",", ":"), allow_nan=False), float(now)),
             )
             if created:
                 con.execute(
@@ -297,6 +302,7 @@ class Store:
                 since = max(0, (created[0] if created else max_cursor + 1) - 1)
             events, cursor = self._events(con, int(since))
             con.execute("COMMIT")
+            self.generation += 1
             return WorldResult(
                 state=state,
                 gains=gains,
@@ -312,3 +318,110 @@ class Store:
             raise
         finally:
             con.close()
+
+
+class SnapshotCache:
+    """Read-only projection of the world for public viewers.
+
+    Public GETs must never write SQLite: the persisted state is opened read-only,
+    copied, advanced in memory to "now", and shared for a short TTL. A single
+    lock gives single-flight refresh, so a hundred viewers still cause at most
+    one state read per TTL window. Committed admin writes bump ``generation``
+    and invalidate the snapshot immediately.
+    """
+
+    def __init__(self, store, ttl=1.0):
+        self.store = store
+        self.ttl = float(ttl)
+        self._lock = threading.Lock()
+        self._base = None
+        self._at = 0.0
+        self._generation = -1
+
+    def _ro_connect(self):
+        if not os.path.exists(self.store.path):
+            return None
+        uri = "file:%s?mode=ro" % quote(os.path.abspath(self.store.path))
+        try:
+            return sqlite3.connect(uri, uri=True, timeout=5.0, isolation_level=None)
+        except sqlite3.OperationalError:
+            # Read-only WAL access can fail if the -shm file is unavailable;
+            # fall back to a normal connection that only ever runs SELECTs.
+            return self.store._connect()
+
+    def read_state(self):
+        try:
+            con = self._ro_connect()
+        except sqlite3.OperationalError:
+            return None
+        if con is None:
+            return None
+        try:
+            row = con.execute("SELECT state_json FROM world WHERE id = 1").fetchone()
+        except sqlite3.OperationalError:
+            return None
+        finally:
+            con.close()
+        if row is None:
+            return None
+        return economy.normalize_state(json.loads(row[0]))
+
+    def read_events(self, since):
+        con = self._ro_connect()
+        if con is None:
+            return [], 0
+        try:
+            row = con.execute("SELECT MAX(id) AS cursor FROM world_events").fetchone()
+            max_cursor = int(row[0] or 0)
+            if since is None:
+                return [], max_cursor
+            rows = con.execute(
+                "SELECT id, created_at, kind, payload_json FROM world_events "
+                "WHERE id > ? ORDER BY id ASC LIMIT ?",
+                (int(since), EVENT_LIMIT),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return [], 0
+        finally:
+            con.close()
+        events = []
+        for event_id, created_at, kind, payload_json in rows:
+            payload = json.loads(payload_json)
+            payload.update({"id": int(event_id), "kind": kind, "at": float(created_at)})
+            events.append(payload)
+        cursor = events[-1]["id"] if events else int(since)
+        return events, cursor
+
+    def _refresh(self, now):
+        state = self.read_state()
+        if state is None:
+            state = economy.initial_state(now)
+            state["last_sim_at"] = float(now)
+        gains = economy.advance(state, now)
+        return {
+            "state": state,
+            "gains": gains,
+            "now": float(now),
+        }
+
+    def latest(self, since=None):
+        with self._lock:
+            now = time.time()
+            fresh = (
+                self._base is not None
+                and self._generation == self.store.generation
+                and (time.monotonic() - self._at) < self.ttl
+            )
+            if not fresh:
+                self._base = self._refresh(now)
+                self._at = time.monotonic()
+                self._generation = self.store.generation
+            base = self._base
+        events, cursor = self.read_events(since)
+        return WorldResult(
+            state=base["state"],
+            gains=base["gains"],
+            events=events,
+            cursor=cursor,
+            now=base["now"],
+        )

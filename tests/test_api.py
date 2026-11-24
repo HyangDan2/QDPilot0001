@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import socketserver
+import sqlite3
 import tempfile
 import threading
 import time
@@ -77,6 +78,33 @@ class ApiTests(unittest.TestCase):
             return response.status, dict(response.getheaders()), parsed
         finally:
             connection.close()
+
+    def test_public_read_does_not_touch_the_database(self):
+        self.call("GET", ADMIN + "/api/v1/state")
+        with sqlite3.connect(self.store.path) as con:
+            before = (
+                con.execute("SELECT state_json, updated_at FROM world WHERE id = 1").fetchone(),
+                con.execute("SELECT COUNT(*) FROM world_events").fetchone()[0],
+            )
+        for _ in range(3):
+            status, _, body = self.call("GET", WORLD + "/api/v1/state", user=None)
+            self.assertEqual(status, 200)
+            self.assertNotIn("message", body["events"][:1] if body["events"] else [])
+        with sqlite3.connect(self.store.path) as con:
+            after = (
+                con.execute("SELECT state_json, updated_at FROM world WHERE id = 1").fetchone(),
+                con.execute("SELECT COUNT(*) FROM world_events").fetchone()[0],
+            )
+        self.assertEqual(before, after)
+
+    def test_public_view_sees_admin_writes_immediately(self):
+        self.call("GET", WORLD + "/api/v1/state", user=None)
+        self.call("POST", ADMIN + "/api/v1/actions",
+                  body={"opId": "op_public_sync", "action": {"type": "buyServer", "tier": "cache", "qty": 1}},
+                  user="buyer")
+        status, _, body = self.call("GET", WORLD + "/api/v1/state", user=None)
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(body["state"]["servers"]["cache"], 2)
 
     def test_state_reports_server_time(self):
         status, _, body = self.call("GET", ADMIN + "/api/v1/state")

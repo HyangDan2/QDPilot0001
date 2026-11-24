@@ -5,10 +5,11 @@ import os
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 
 from server import economy
-from server.store import Store
+from server.store import SnapshotCache, Store
 
 NOW = 1_700_000_000.0
 OP = "op_aaaaaaaa"
@@ -252,3 +253,76 @@ class StoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SnapshotCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = os.path.join(self.tmp.name, "snapshot.sqlite3")
+        self.store = Store(self.path)
+        self.store.world(NOW)
+
+    def stored(self):
+        with sqlite3.connect(self.path) as con:
+            state = json.loads(con.execute("SELECT state_json FROM world WHERE id = 1").fetchone()[0])
+            updated = con.execute("SELECT updated_at FROM world WHERE id = 1").fetchone()[0]
+            events = con.execute("SELECT COUNT(*) FROM world_events").fetchone()[0]
+        return state, updated, events
+
+    def test_public_snapshot_is_read_only(self):
+        before = self.stored()
+        cache = SnapshotCache(self.store)
+        cache.latest(0)
+        cache.latest(0)
+        self.assertEqual(self.stored(), before)
+
+    def test_projection_advances_without_persisting(self):
+        state, _, _ = self.stored()
+        cache = SnapshotCache(self.store)
+        snapshot = cache.latest(0)
+        self.assertGreater(snapshot.state["requests"], state["requests"])
+        self.assertEqual(self.stored()[0], state)
+
+    def test_single_flight_refresh(self):
+        cache = SnapshotCache(self.store, ttl=5)
+        calls = []
+        original = cache.read_state
+
+        def slow_read():
+            calls.append(1)
+            time.sleep(0.1)
+            return original()
+
+        cache.read_state = slow_read
+        barrier = threading.Barrier(8)
+        results = []
+
+        def worker():
+            barrier.wait()
+            results.append(cache.latest(0))
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(results), 8)
+        self.assertEqual(len(calls), 1)
+        totals = {result.state["total_lifetime"] for result in results}
+        self.assertEqual(len(totals), 1)
+
+    def test_admin_write_invalidates_the_snapshot(self):
+        cache = SnapshotCache(self.store, ttl=60)
+        self.assertEqual(cache.latest(0).state["servers"], {"cache": 1})
+        self.store.world(NOW + 1, action={"type": "buyServer", "tier": "cache", "qty": 1}, op_id=OP)
+        self.assertEqual(cache.latest(0).state["servers"], {"cache": 2})
+
+    def test_snapshot_with_events_since_cursor(self):
+        self.store.world(NOW + 1, action={"type": "buyServer", "tier": "cache", "qty": 1}, op_id=OP)
+        cache = SnapshotCache(self.store)
+        snapshot = cache.latest(0)
+        kinds = [event["kind"] for event in snapshot.events]
+        self.assertIn("install", kinds)
+        follow = cache.latest(snapshot.cursor)
+        self.assertEqual(follow.events, [])

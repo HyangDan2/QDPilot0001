@@ -21,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import economy
+from .store import SnapshotCache
 
 ADMIN_BASE = "/admin/idle-ops"
 ADMIN_API = ADMIN_BASE + "/api/v1"
@@ -81,6 +82,7 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "HD2LabIdleOps/1.1"
     store = None
+    snapshot = None
     dev_user = None
     dev_role = None
     static_root = None
@@ -162,7 +164,7 @@ class Handler(BaseHTTPRequestHandler):
             self._handle_state(public=False)
             return
         if path == PUBLIC_API + "/state":
-            self._handle_state(public=True)
+            self._handle_public_state()
             return
         if path.startswith(ADMIN_API + "/") or path.startswith(PUBLIC_API + "/"):
             self._json(404, {"detail": "not found"})
@@ -220,6 +222,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             result = self.store.world(actor=user, since=self._since(self.path))
         except (ValueError, sqlite3.Error) as exc:
+            self._error(exc)
+            return
+        self._json(200, build_payload(result, result.now))
+
+    def _handle_public_state(self):
+        try:
+            result = self.snapshot.latest(self._since(self.path))
+        except (ValueError, sqlite3.Error, OSError) as exc:
             self._error(exc)
             return
         self._json(200, build_payload(result, result.now))
@@ -328,12 +338,13 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
-def make_handler(store, dev_user=None, static_root=None, public_root=None, dev_role=None):
+def make_handler(store, dev_user=None, static_root=None, public_root=None, dev_role=None, snapshot=None):
     return type(
         "BoundHandler",
         (Handler,),
         {
             "store": store,
+            "snapshot": snapshot if snapshot is not None else SnapshotCache(store),
             "dev_user": dev_user,
             "static_root": static_root,
             "public_root": public_root,

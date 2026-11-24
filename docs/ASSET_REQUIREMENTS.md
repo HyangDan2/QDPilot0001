@@ -1,5 +1,10 @@
 # 에셋 요구사항 — Idle Ops Phase 2
 
+> **이 문서는 Phase 2(v2 manifest) 시점 기록입니다.** 신규 아트 납품·검수는
+> [`ASSET_REQUIREMENTS_V3.md`](ASSET_REQUIREMENTS_V3.md)를 따릅니다. v3에서는 기본
+> 방향이 자산별 `facing`으로 바뀌었고(현행 향단이 원본은 **오른쪽**), 768×768 제작
+> 캔버스·아틀라스/시퀀스 납품·프레임별 앵커/히트 이벤트를 지원합니다.
+
 신규 아트 반입 요청 목록과 납품 규격을 정의합니다. 캐릭터 카논·팔레트는
 [`ART_DIRECTION.md`](ART_DIRECTION.md)를 따릅니다.
 

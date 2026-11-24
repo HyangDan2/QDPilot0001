@@ -32,8 +32,18 @@ export class HeroController {
 
   playOnce(state) {
     if (!STATES[state] || this.oneshot) return;
-    this.oneshot = { state, remaining: STATES[state].seconds };
+    this.oneshot = { state, remaining: this.animator.duration(state) };
     this.animator.play(state, { restart: true });
+  }
+
+  attackDuration() {
+    const duration = this.scene.library?.durationOf?.("attack");
+    return Number.isFinite(duration) && duration > 0 ? duration : MOTION.attackSeconds;
+  }
+
+  attackHitTime() {
+    const hit = this.scene.library?.hitSeconds?.("attack");
+    return Number.isFinite(hit) ? hit : 0.16;
   }
 
   reset() {
@@ -112,7 +122,7 @@ export class HeroController {
         if (bug) {
           hero.impact = 0;
           this.setMode("attack");
-          hero.timer = MOTION.attackSeconds;
+          hero.timer = this.attackDuration();
         } else {
           hero.timer = MOTION.repairSeconds;
           this.setMode("repair");
@@ -141,10 +151,8 @@ export class HeroController {
 
     if (hero.mode === "attack") {
       hero.timer -= dt;
-      const elapsed = MOTION.attackSeconds - hero.timer;
-      const sheet = scene.library?.artFor("attack")?.sheet;
-      const hitAt = sheet ? 6 / 16 : 0.16;
-      if (hero.impact === 0 && elapsed > hitAt) {
+      const elapsed = this.attackDuration() - hero.timer;
+      if (hero.impact === 0 && elapsed > this.attackHitTime()) {
         hero.impact = 1;
         scene.hitTarget();
       }

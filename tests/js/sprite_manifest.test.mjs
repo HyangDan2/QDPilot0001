@@ -1,0 +1,409 @@
+// WO-08 regression coverage: manifest v3 normalization, v2 compatibility,
+// per-asset facing, per-frame anchors/durations, hit events and atlas math.
+// These tests import the real engine modules (no mocks of the code under test).
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import {
+  DEFAULT_MANIFEST,
+  LOAD_RETRY_MS,
+  MAX_TEXTURE,
+  SpriteLibrary,
+  flipFor,
+  normalizeManifest,
+} from "../../static/public/assets/engine/sprites.js";
+import { Animator, STATES, specDuration } from "../../static/public/assets/engine/animation.js";
+
+const manifestUrl = new URL("../../static/public/assets/sprites/manifest.json", import.meta.url);
+
+function approx(actual, expected, epsilon = 1e-9) {
+  assert.ok(Math.abs(actual - expected) <= epsilon, `${actual} != ${expected}`);
+}
+
+function libraryWith(manifest) {
+  const library = new SpriteLibrary();
+  library.manifest = normalizeManifest(manifest).manifest;
+  return library;
+}
+
+test("shipped manifest is manifest v3 with right-facing hero art", async () => {
+  const raw = JSON.parse(await readFile(manifestUrl, "utf8"));
+  assert.equal(raw.version, 3);
+  const { manifest, problems } = normalizeManifest(raw);
+  assert.deepEqual(problems, []);
+  const expected = { idle: 1.0, run: 1.0, attack: 0.75, repair: 0.8, levelup: 1.0, install: 1.0 };
+  let frames = 0;
+  for (const [state, seconds] of Object.entries(expected)) {
+    const entry = manifest.states[state];
+    assert.equal(entry.facing, "right", `${state} facing`);
+    assert.equal(entry.fallback.facing, "right", `${state} fallback facing`);
+    approx(entry.seconds, seconds);
+    assert.ok(entry.fallback.file.endsWith(".png"), `${state} fallback file`);
+    frames += entry.frames;
+  }
+  assert.equal(frames, 64);
+  assert.deepEqual(manifest.states.attack.hits, [{ frame: 6, type: "strike" }]);
+  assert.equal(manifest.states.attack.source, null, "no final art has been delivered yet");
+  assert.equal(manifest.bugs.alive.facing, "left");
+  assert.equal(manifest.bugs.hit.facing, "left");
+});
+
+test("manifest v2 still loads: sheet string becomes a strip source", () => {
+  const v2 = {
+    version: 2,
+    facing: "left",
+    sheetFormat: "horizontal-strip",
+    cell: [320, 640],
+    states: {
+      idle: { sheet: "idle-sheet.png", fallback: "idle.png", frames: 8, fps: 8, loop: true },
+      attack: { sheet: "attack-sheet.png", fallback: "strike.png", frames: 12, fps: 16, loop: false, hitFrame: 6 },
+    },
+  };
+  const { manifest, problems } = normalizeManifest(v2);
+  assert.deepEqual(problems, []);
+  assert.equal(manifest.version, 2);
+  assert.deepEqual(manifest.states.idle.source, { type: "strip", file: "idle-sheet.png", width: null });
+  assert.deepEqual(manifest.states.idle.fallback, { file: "idle.png", facing: "left" });
+  assert.equal(manifest.states.attack.hits[0].frame, 6);
+  assert.equal(manifest.states.attack.seconds, 0.75);
+  // States absent from a partial v2 manifest keep the built-in fallbacks.
+  assert.equal(manifest.states.run.fallback.file, "hyangdani-run.png");
+});
+
+test("v3 per-state facing, per-frame anchors and a differently facing fallback", () => {
+  const raw = {
+    version: 3,
+    facing: "right",
+    anchor: [0.5, 0.9],
+    states: {
+      run: {
+        frames: 4,
+        fps: 8,
+        facing: "right",
+        anchor: [0.4, 0.95],
+        anchors: [[0.4, 0.95], [0.5, 0.95], [0.55, 0.95], [0.45, 0.95]],
+        source: { type: "strip", file: "run-strip.png" },
+        fallback: { file: "run.png", facing: "left" },
+      },
+    },
+  };
+  const { manifest, problems } = normalizeManifest(raw);
+  assert.deepEqual(problems, []);
+  const run = manifest.states.run;
+  assert.equal(run.source.type, "strip");
+  assert.equal(run.seconds, 0.5);
+  assert.equal(run.facing, "right");
+  assert.deepEqual(run.anchors[2], [0.55, 0.95]);
+  assert.deepEqual(run.fallback, { file: "run.png", facing: "left" });
+  assert.equal(manifest.states.idle.facing, "right");
+});
+
+test("per-frame durations drive seconds and hit timing", () => {
+  const raw = {
+    version: 3,
+    states: {
+      attack: {
+        frames: 4,
+        fps: 4,
+        durations: [0.1, 0.2, 0.3, 0.4],
+        hits: [{ frame: 2, type: "strike" }],
+      },
+    },
+  };
+  const { manifest, problems } = normalizeManifest(raw);
+  assert.deepEqual(problems, []);
+  const attack = manifest.states.attack;
+  approx(attack.seconds, 1.0);
+  const library = libraryWith(raw);
+  approx(library.hitSeconds("attack"), 0.3);
+  approx(library.durationOf("attack"), 1.0);
+});
+
+test("hitSeconds falls back to frame/fps and is null without hits", () => {
+  const library = new SpriteLibrary();
+  library.manifest = normalizeManifest(DEFAULT_MANIFEST).manifest;
+  approx(library.hitSeconds("attack"), 6 / 16);
+  approx(library.durationOf("attack"), 0.75);
+  assert.equal(library.hitSeconds("idle"), null);
+  assert.equal(library.hitSeconds("levelup"), null);
+});
+
+test("strip, atlas and sequence sources compute frame rectangles", () => {
+  const library = new SpriteLibrary();
+
+  library.manifest = normalizeManifest({
+    version: 3,
+    states: { run: { frames: 4, source: { type: "strip", file: "strip.png" } } },
+  }).manifest;
+  library.images["strip.png"] = { width: 400, height: 200 };
+  const strip = library.primaryArt(library.entry("run"));
+  assert.equal(strip.kind, "strip");
+  assert.deepEqual(strip.rect(2), { image: library.images["strip.png"], sx: 200, sy: 0, sw: 100, sh: 200 });
+  assert.equal(strip.rect(99).sx, 300, "frame index clamps to the last cell");
+
+  library.manifest = normalizeManifest({
+    version: 3,
+    states: {
+      idle: {
+        frames: 8,
+        source: { type: "atlas", file: "atlas.png", columns: 4, rows: 2, width: 3072, height: 1536 },
+      },
+    },
+  }).manifest;
+  library.images["atlas.png"] = { width: 3072, height: 1536 };
+  const atlas = library.primaryArt(library.entry("idle"));
+  assert.equal(atlas.kind, "atlas");
+  assert.deepEqual(atlas.rect(5), { image: library.images["atlas.png"], sx: 768, sy: 768, sw: 768, sh: 768 });
+  assert.deepEqual(atlas.rect(7), { image: library.images["atlas.png"], sx: 2304, sy: 768, sw: 768, sh: 768 });
+
+  library.manifest = normalizeManifest({
+    version: 3,
+    states: {
+      run: { frames: 3, source: { type: "sequence", files: ["r0.png", "r1.png", "r2.png"] } },
+    },
+  }).manifest;
+  library.images["r0.png"] = { width: 10, height: 20 };
+  library.images["r1.png"] = { width: 10, height: 20 };
+  library.images["r2.png"] = { width: 10, height: 20 };
+  const sequence = library.primaryArt(library.entry("run"));
+  assert.equal(sequence.kind, "sequence");
+  assert.equal(sequence.frames, 3);
+  assert.equal(sequence.rect(1).image, library.images["r1.png"]);
+  assert.equal(sequence.rect(1).sw, 10);
+});
+
+test("atlas and file validation reports problems instead of loading bad art", () => {
+  const small = normalizeManifest({
+    version: 3,
+    states: { idle: { frames: 8, source: { type: "atlas", file: "a.png", columns: 2, rows: 2 } } },
+  });
+  assert.ok(small.problems.some((p) => p.includes("holds 4 cells for 8 frames")));
+  assert.equal(small.manifest.states.idle.source, null, "an invalid atlas is not used");
+
+  const huge = normalizeManifest({
+    version: 3,
+    states: {
+      idle: { frames: 8, source: { type: "atlas", file: "a.png", columns: 4, rows: 2, width: MAX_TEXTURE * 2, height: 1536 } },
+    },
+  });
+  assert.ok(huge.problems.some((p) => p.includes(`exceeds ${MAX_TEXTURE}`)));
+  assert.equal(huge.manifest.states.idle.source, null);
+
+  const uneven = normalizeManifest({
+    version: 3,
+    states: {
+      idle: { frames: 8, source: { type: "atlas", file: "a.png", columns: 4, rows: 2, width: 3001, height: 1536 } },
+    },
+  });
+  assert.ok(uneven.problems.some((p) => p.includes("does not divide evenly")));
+  assert.equal(uneven.manifest.states.idle.source, null);
+
+  const traversal = normalizeManifest({
+    version: 3,
+    states: { run: { frames: 2, source: { type: "strip", file: "../escape.png" }, fallback: "/etc/passwd" } },
+  });
+  assert.ok(traversal.problems.some((p) => p.includes("inside the sprite directory")));
+  assert.equal(traversal.manifest.states.run.source, null);
+  assert.equal(traversal.manifest.states.run.fallback, null);
+});
+
+test("invalid durations, hit frames and sequence lengths are reported", () => {
+  const durations = normalizeManifest({
+    version: 3,
+    states: { attack: { frames: 4, durations: [0.1, 0.2] } },
+  });
+  assert.ok(durations.problems.some((p) => p.includes("durations has 2 entries")));
+
+  const mismatch = normalizeManifest({
+    version: 3,
+    states: { attack: { frames: 4, seconds: 2, durations: [0.1, 0.2, 0.3, 0.4] } },
+  });
+  assert.ok(mismatch.problems.some((p) => p.includes("seconds must equal the sum of durations")));
+  approx(mismatch.manifest.states.attack.seconds, 1.0);
+
+  const consistent = normalizeManifest({
+    version: 3,
+    states: { attack: { frames: 4, seconds: 1, durations: [0.1, 0.2, 0.3, 0.4] } },
+  });
+  assert.deepEqual(consistent.problems, []);
+  approx(consistent.manifest.states.attack.seconds, 1.0);
+
+  const hits = normalizeManifest({
+    version: 3,
+    states: { attack: { frames: 4, hits: [{ frame: 9 }] } },
+  });
+  assert.ok(hits.problems.some((p) => p.includes("hit frame out of range")));
+  assert.deepEqual(hits.manifest.states.attack.hits, []);
+
+  const sequence = normalizeManifest({
+    version: 3,
+    states: { run: { frames: 4, source: { type: "sequence", files: ["a.png"] } } },
+  });
+  assert.ok(sequence.problems.some((p) => p.includes("1 frames, expected 4")));
+
+  const version = normalizeManifest({ version: 9 });
+  assert.ok(version.problems.some((p) => p.includes("unsupported manifest version")));
+  assert.equal(version.manifest.version, 3);
+});
+
+test("flipFor mirrors only when direction differs from the art facing", () => {
+  assert.equal(flipFor("right", 1), 1);
+  assert.equal(flipFor("right", -1), -1);
+  assert.equal(flipFor("left", -1), 1);
+  assert.equal(flipFor("left", 1), -1);
+});
+
+test("animator honours seconds, per-frame durations and hit frames", () => {
+  const idle = new Animator("idle");
+  approx(idle.duration(), 1.0);
+  idle.update(0.125);
+  assert.equal(idle.frameIndex(), 1);
+
+  const attack = new Animator("attack");
+  attack.play("attack", { restart: true });
+  attack.update(0.2);
+  assert.equal(attack.frameIndex(), 3);
+  assert.equal(attack.consumeHit(), false);
+  attack.update(0.25);
+  assert.equal(attack.frameIndex(), 7);
+  assert.equal(attack.consumeHit(), true);
+  assert.equal(attack.consumeHit(), false, "hit fires once");
+  attack.update(0.35);
+  assert.equal(attack.done, true);
+  assert.equal(attack.frameIndex(), 11);
+
+  const run = new Animator("run");
+  run.setSpecs({ run: { frames: 4, durations: [0.1, 0.2, 0.3, 0.4], loop: true } });
+  run.elapsed = 0.05;
+  assert.equal(run.frameIndex(), 0);
+  run.elapsed = 0.15;
+  assert.equal(run.frameIndex(), 1);
+  run.elapsed = 0.35;
+  assert.equal(run.frameIndex(), 2);
+  run.elapsed = 0.65;
+  assert.equal(run.frameIndex(), 3);
+  run.elapsed = 1.05;
+  assert.equal(run.frameIndex(), 0, "loop wraps over the duration sum");
+
+  const scripted = new Animator("attack");
+  scripted.setSpecs({ attack: { frames: 8, hits: [{ frame: 3 }, { frame: 5 }] } });
+  scripted.play("attack", { restart: true });
+  scripted.update(0.2);
+  assert.equal(scripted.frameIndex(), 2);
+  assert.equal(scripted.consumeHit(), false);
+  scripted.update(0.1);
+  assert.equal(scripted.frameIndex(), 3);
+  assert.equal(scripted.consumeHit(), true);
+});
+
+test("early art access before the manifest arrives does not poison lazy loading", async () => {
+  const originalImage = globalThis.Image;
+  const originalFetch = globalThis.fetch;
+  const raw = {
+    version: 3,
+    facing: "right",
+    states: {
+      idle: {
+        frames: 8,
+        fps: 8,
+        source: { type: "atlas", file: "idle-atlas.png", columns: 4, rows: 2, width: 3072, height: 1536 },
+        fallback: { file: "idle.png", facing: "right" },
+      },
+    },
+  };
+  const sizes = {
+    "idle-atlas.png": [3072, 1536],
+    "idle.png": [379, 640],
+    "hyangdani-idle.png": [379, 640],
+    "bug-alive.png": [318, 300],
+    "bug-hit.png": [314, 300],
+  };
+  globalThis.Image = class {
+    set src(value) {
+      const name = String(value).split("/").pop();
+      const [width, height] = sizes[name] || [0, 0];
+      queueMicrotask(() => {
+        this.width = width;
+        this.height = height;
+        this.complete = width > 0;
+        if (width > 0) this.onload?.();
+        else this.onerror?.();
+      });
+    }
+  };
+  globalThis.fetch = async () => ({ ok: true, json: async () => raw });
+  try {
+    const library = new SpriteLibrary();
+    // The scene draws before load() resolves; this used the built-in defaults.
+    await library.ensureState("idle");
+    assert.equal(library.stateReady.has("idle"), true);
+    await library.load();
+    await library.ensureState("idle");
+    const art = library.artFor("idle");
+    assert.equal(art.kind, "atlas");
+    assert.equal(art.frames, 8);
+    assert.equal(library.problems.length, 0);
+  } finally {
+    globalThis.Image = originalImage;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("a missing sprite is retried on a cooldown and keeps previously loaded art", async () => {
+  const originalImage = globalThis.Image;
+  const originalNow = Date.now;
+  let constructed = 0;
+  let now = 1000;
+  globalThis.Image = class {
+    constructor() {
+      constructed += 1;
+      this.width = 0;
+      this.height = 0;
+    }
+    set src(value) {
+      const name = String(value).split("/").pop();
+      queueMicrotask(() => {
+        if (name === "ok.png") {
+          this.width = 100;
+          this.height = 50;
+          this.onload?.();
+        } else {
+          this.onerror?.();
+        }
+      });
+    }
+  };
+  Date.now = () => now;
+  try {
+    const library = new SpriteLibrary();
+    library.manifest = normalizeManifest({
+      version: 3,
+      states: {
+        idle: { frames: 4, fps: 4, source: { type: "strip", file: "missing.png" }, fallback: { file: "ok.png" } },
+      },
+    }).manifest;
+    library.images["ok.png"] = { width: 100, height: 50 };
+    assert.equal(library.artFor("idle").kind, "fallback");
+    await library.ensureState("idle");
+    const requests = constructed;
+    assert.equal(requests, 1);
+    await library.ensureState("idle");
+    await library.ensureState("idle");
+    assert.equal(constructed, requests, "a failed file is not re-fetched during the cooldown");
+    now += LOAD_RETRY_MS + 1;
+    await library.ensureState("idle");
+    assert.ok(constructed > requests, "the file is retried after the cooldown");
+    assert.equal(library.artFor("idle").kind, "fallback", "the previously loaded fallback stays usable");
+  } finally {
+    globalThis.Image = originalImage;
+    Date.now = originalNow;
+  }
+});
+
+test("specDuration prefers seconds, then durations, then frames/fps", () => {
+  approx(specDuration({ frames: 10, fps: 10 }), 1);
+  approx(specDuration({ frames: 10, fps: 10, durations: [0.5, 0.5] }), 1);
+  approx(specDuration({ frames: 4, fps: 8, seconds: 2 }), 2);
+  approx(specDuration(STATES.repair), 0.8);
+});

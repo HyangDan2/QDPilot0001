@@ -1,23 +1,47 @@
 {
-  "version": 2,
+  "version": 3,
   "character": "hyangdani",
   "anchor": [0.5, 1.0],
-  "facing": "left",
-  "sheetFormat": "horizontal-strip",
-  "cell": [320, 640],
+  "facing": "right",
+  "maxTexture": 4096,
+  "cell": [768, 768],
   "naming": "hyangdani-{state}.png",
   "states": {
-    "idle":    { "sheet": null, "fallback": "hyangdani-idle.png", "frames": 8,  "fps": 8,  "loop": true },
-    "run":     { "sheet": null, "fallback": "hyangdani-run.png", "frames": 12, "fps": 12, "loop": true },
-    "attack":  { "sheet": null, "fallback": "hyangdani-strike.png", "frames": 12, "fps": 16, "loop": false, "hitFrame": 6 },
-    "repair":  { "sheet": null, "fallback": "hyangdani-idle.png", "frames": 8,  "fps": 10, "loop": true },
-    "levelup": { "sheet": null, "fallback": "hyangdani-idle.png", "frames": 12, "fps": 12, "loop": false },
-    "install": { "sheet": null, "fallback": "hyangdani-idle.png", "frames": 12, "fps": 12, "loop": false }
+    "idle": {
+      "frames": 8, "fps": 8, "loop": true, "seconds": 1.0, "facing": "right",
+      "source": null,
+      "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
+    },
+    "run": {
+      "frames": 12, "fps": 12, "loop": true, "seconds": 1.0, "facing": "right",
+      "source": null,
+      "fallback": { "file": "hyangdani-run.png", "facing": "right" }
+    },
+    "attack": {
+      "frames": 12, "fps": 16, "loop": false, "seconds": 0.75, "facing": "right",
+      "hits": [{ "frame": 6, "type": "strike" }],
+      "source": null,
+      "fallback": { "file": "hyangdani-strike.png", "facing": "right" }
+    },
+    "repair": {
+      "frames": 8, "fps": 10, "loop": true, "seconds": 0.8, "facing": "right",
+      "source": null,
+      "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
+    },
+    "levelup": {
+      "frames": 12, "fps": 12, "loop": false, "seconds": 1.0, "facing": "right",
+      "source": null,
+      "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
+    },
+    "install": {
+      "frames": 12, "fps": 12, "loop": false, "seconds": 1.0, "facing": "right",
+      "source": null,
+      "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
+    }
   },
   "bugs": {
-    "alive": "bug-alive.png",
-    "hit": "bug-hit.png",
-    "cell": [512, 512],
+    "alive": { "file": "bug-alive.png", "facing": "left" },
+    "hit": { "file": "bug-hit.png", "facing": "left" },
     "naming": "bug-{state}.png"
   }
 }

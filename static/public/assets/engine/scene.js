@@ -2,7 +2,7 @@
 // capped, paused while hidden, static under reduced motion.
 
 import { TAU, clamp, rand, LIMITS, MOTION, TIERS, TIER_ORDER } from "./config.js";
-import { SpriteLibrary } from "./sprites.js";
+import { SpriteLibrary, flipFor } from "./sprites.js";
 import { Effects, roundRect } from "./effects.js";
 import { HeroController } from "./motion.js";
 import { RoomPainter, layoutRacks, drawRack, drawEmptySlot } from "./room.js";
@@ -87,6 +87,7 @@ export class WorldScene {
   }
 
   ready() {
+    this.animator.setSpecs(this.library.specs());
     this.loaded = true;
     if (this.motion) {
       this.spawnBug(0.3);
@@ -378,11 +379,11 @@ export class WorldScene {
   drawBug(ctx, bug) {
     const size = this.bugSize;
     const bob = bug.bob || 0;
-    const image = this.library.bugArt(bug.state === "hit" ? "hit" : "alive");
+    const art = this.library.bugArt(bug.state === "hit" ? "hit" : "alive");
+    const flip = flipFor(art ? art.facing : "left", bug.dir);
     ctx.save();
     ctx.globalAlpha = bug.state === "hit" ? Math.max(0, 1 - bug.dead / 0.55) : 1;
     ctx.translate(bug.x, bug.y + bob);
-    const flip = bug.dir > 0 ? -1 : 1;
     if (bug.state === "hit") {
       ctx.rotate(-0.25 * flip);
       ctx.scale(1.08, 0.92);
@@ -390,11 +391,12 @@ export class WorldScene {
       ctx.rotate(Math.sin(this.time * 3 + bug.phase) * 0.05);
     }
     this.shadow(ctx, size * 0.38);
-    if (image) {
+    if (art) {
+      const rect = art.rect(0);
       const h = size;
-      const w = image.width * (h / image.height);
+      const w = rect.sw * (h / rect.sh);
       ctx.scale(flip, 1);
-      ctx.drawImage(image, -w / 2, -h, w, h);
+      ctx.drawImage(rect.image, rect.sx, rect.sy, rect.sw, rect.sh, -w / 2, -h, w, h);
     } else {
       this.drawFallbackBug(ctx, size, flip);
     }
@@ -410,28 +412,28 @@ export class WorldScene {
     ctx.save();
     ctx.translate(hero.x, hero.y + (hero.hop || 0) + bob);
     this.shadow(ctx, height * 0.2);
-    if (art?.image) {
-      const frames = Math.max(1, art.frames);
-      const frameW = art.image.width / frames;
-      const frameH = art.image.height;
-      const drawW = frameW * (height / frameH);
-      const flip = (this.library.facesLeft ? hero.dir >= 0 : hero.dir < 0) ? -1 : 1;
-      const anchor = this.library.anchor;
+    const frame = art ? this.animator.frameIndex() % Math.max(1, art.frames) : 0;
+    const rect = art?.rect(frame);
+    if (rect?.image && rect.sw > 0 && rect.sh > 0) {
+      const drawW = rect.sw * (height / rect.sh);
+      const [ax, ay] = art.anchorAt(frame);
+      // Art faces its declared direction; mirror only when moving the other way.
+      const flip = flipFor(art.facing, hero.dir);
       let lunge = 0;
       let tilt = 0;
       if (state === "attack") {
-        const progress = clamp(this.animator.elapsed / MOTION.attackSeconds, 0, 1);
+        const duration = this.animator.duration("attack") || MOTION.attackSeconds;
+        const progress = clamp(this.animator.elapsed / duration, 0, 1);
         lunge = Math.sin(progress * Math.PI) * 26 * hero.dir;
         tilt = Math.sin(progress * Math.PI) * 0.1 * hero.dir;
       }
       ctx.translate(lunge, 0);
       ctx.rotate(tilt);
       ctx.scale(flip, 1);
-      const frame = this.animator.frameIndex() % frames;
       ctx.drawImage(
-        art.image,
-        frame * frameW, 0, frameW, frameH,
-        -drawW * anchor.x, -height * anchor.y, drawW, height,
+        rect.image,
+        rect.sx, rect.sy, rect.sw, rect.sh,
+        -drawW * ax, -height * ay, drawW, height,
       );
     } else {
       this.drawFallbackHero(ctx, height, hero.dir);
@@ -442,7 +444,8 @@ export class WorldScene {
   drawFallbackHero(ctx, height, dir) {
     const s = height / 220;
     ctx.save();
-    ctx.scale(dir >= 0 ? -1 : 1, 1);
+    // The procedural stand-in faces right, like the shipped hero art.
+    ctx.scale(dir < 0 ? -1 : 1, 1);
     ctx.fillStyle = "#e9e7ff";
     roundRect(ctx, -s * 22, -s * 92, s * 44, s * 84, s * 12);
     ctx.fill();

@@ -569,18 +569,24 @@ class Store:
                     "SELECT last_seen, last_reward_at FROM admin_seen WHERE username = ?",
                     (actor,),
                 ).fetchone()
-                away = max(0.0, now - seen["last_reward_at"]) if seen else 0.0
+                previous_seen = seen["last_seen"] if seen else now
+                previous_reward = seen["last_reward_at"] if seen else now
+                # A corrected (backwards) clock must not make this admin's
+                # checkpoints jump back in time or produce a negative absence.
+                away = max(0.0, now - previous_reward) if seen else 0.0
+                settled_at = max(now, state["last_sim_at"])
                 timestamps = {
-                    "worldSettledAt": now,
-                    "adminLastSeen": seen["last_seen"] if seen else now,
-                    "adminLastCheck": now,
-                    "lastRewardAt": seen["last_reward_at"] if seen else now,
+                    "worldSettledAt": settled_at,
+                    "adminLastSeen": previous_seen,
+                    "adminLastCheck": max(previous_seen, now),
+                    "lastRewardAt": previous_reward,
                     "awaySeconds": away,
                 }
                 con.execute(
                     "INSERT INTO admin_seen (username, last_seen, last_reward_at, checks) "
                     "VALUES (?, ?, ?, 1) ON CONFLICT(username) DO UPDATE SET "
-                    "last_seen = excluded.last_seen, last_reward_at = excluded.last_reward_at, "
+                    "last_seen = MAX(admin_seen.last_seen, excluded.last_seen), "
+                    "last_reward_at = MAX(admin_seen.last_reward_at, excluded.last_reward_at), "
                     "checks = admin_seen.checks + 1",
                     (actor, now, now),
                 )

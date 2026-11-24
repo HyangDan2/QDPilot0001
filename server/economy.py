@@ -23,6 +23,10 @@ MAX_FUTURE_SKEW = 24 * 3600.0
 # Stored counters stay inside the JavaScript safe-integer range (2^53 - 1), so
 # the browser never sees a value it cannot represent exactly.
 MAX_STATE_VALUE = 9_007_199_254_740_991.0
+# Internal sentinel for a cost whose exponential price exceeds the safe range.
+# It is never serialised: catalog values are clamped to MAX_STATE_VALUE and a
+# sentinel cost can never satisfy ``cost <= requests``.
+UNBUYABLE = MAX_STATE_VALUE + 1
 MAX_SERVERS_PER_TIER = 1_000_000
 MAX_BUY = 1000
 
@@ -114,6 +118,22 @@ def _add(value, chunk):
     return total
 
 
+def _add_counted(value, chunk):
+    """Return ``(new_value, actually_added)`` after saturating at the ceiling."""
+    total = value + chunk
+    if not math.isfinite(total) or total > MAX_STATE_VALUE:
+        total = MAX_STATE_VALUE
+    added = total - value
+    if not math.isfinite(added) or added < 0.0:
+        added = 0.0
+    return total, added
+
+
+def _display_cost(value):
+    """Keep a cost inside the JavaScript-safe range for JSON output."""
+    return int(min(max(0, value), MAX_STATE_VALUE))
+
+
 def initial_state(now):
     return {
         "version": SAVE_VERSION,
@@ -188,9 +208,12 @@ def total_servers(state):
 
 def _price(base, growth, owned):
     try:
-        return int(math.ceil(base * (growth ** int(owned))))
+        price = base * (growth ** int(owned))
     except OverflowError:
-        return int(MAX_STATE_VALUE)
+        return UNBUYABLE
+    if not math.isfinite(price) or price > MAX_STATE_VALUE:
+        return UNBUYABLE
+    return int(math.ceil(price))
 
 
 def server_cost(tier_id, owned):
@@ -385,6 +408,7 @@ def advance(state, now):
     earned = 0.0
     remaining = elapsed
     segments = 0
+    capped = False
     while remaining > 0.0 and segments < MAX_SETTLE_SEGMENTS:
         segments += 1
         rate = rps(state)
@@ -408,33 +432,40 @@ def advance(state, now):
         if not math.isfinite(chunk) or chunk < 0.0:
             chunk = 0.0
         chunk = min(chunk, MAX_STATE_VALUE)
-        earned += chunk
-        state["requests"] = _add(state["requests"], chunk)
-        state["run_lifetime"] = _add(state["run_lifetime"], chunk)
-        state["total_lifetime"] = _add(state["total_lifetime"], chunk)
-        if state["total_lifetime"] >= MAX_STATE_VALUE:
-            remaining = 0.0
-            break
+        state["requests"], added_requests = _add_counted(state["requests"], chunk)
+        state["run_lifetime"], added_run = _add_counted(state["run_lifetime"], chunk)
+        state["total_lifetime"], added_total = _add_counted(state["total_lifetime"], chunk)
+        earned += added_requests
+        if added_total < chunk or added_run < chunk or added_requests < chunk:
+            capped = True
         remaining -= dt
         if boundary is not None and abs(state["total_lifetime"] - boundary) <= THRESHOLD_EPSILON:
             state["total_lifetime"] = boundary
         unlock()
     if remaining > 0.0:
-        # Extreme guard only (100y at absurd rates): settle the remainder at the
-        # current rate rather than burning unbounded CPU. Normal worlds never hit this.
+        # Extreme guard only (100y at absurd rates or the segment cap): settle
+        # the remainder at the current rate and report only what was granted.
         rate = rps(state)
         if math.isfinite(rate) and rate > 0.0:
             chunk = min(rate * remaining, MAX_STATE_VALUE)
-            earned += chunk
-            state["requests"] = _add(state["requests"], chunk)
-            state["run_lifetime"] = _add(state["run_lifetime"], chunk)
-            state["total_lifetime"] = _add(state["total_lifetime"], chunk)
+            state["requests"], added_requests = _add_counted(state["requests"], chunk)
+            state["run_lifetime"], added_run = _add_counted(state["run_lifetime"], chunk)
+            state["total_lifetime"], added_total = _add_counted(state["total_lifetime"], chunk)
+            earned += added_requests
+            if added_total < chunk or added_run < chunk or added_requests < chunk:
+                capped = True
             remaining = 0.0
     if resync:
         state["last_sim_at"] = float(now)
     elif raw_elapsed > 0.0:
         state["last_sim_at"] = float(now)
     unlock()
+    if (
+        state["requests"] >= MAX_STATE_VALUE
+        and state["run_lifetime"] >= MAX_STATE_VALUE
+        and state["total_lifetime"] >= MAX_STATE_VALUE
+    ):
+        capped = True
     return {
         "seconds": elapsed,
         "requests": earned,
@@ -443,6 +474,7 @@ def advance(state, now):
         "achievements": gained,
         "segments": segments,
         "clock": clock,
+        "capped": capped,
     }
 
 
@@ -455,8 +487,9 @@ def catalog(state):
         count_max, cost_max = max_affordable(tier["id"], owned, requests)
         tiers.append({
             "id": tier["id"], "name": tier["name"], "desc": tier["desc"],
-            "owned": owned, "cost": one, "cost10": bulk_cost(tier["id"], owned, 10),
-            "max_count": count_max, "max_cost": cost_max,
+            "owned": owned, "cost": _display_cost(one),
+            "cost10": _display_cost(bulk_cost(tier["id"], owned, 10)),
+            "max_count": count_max, "max_cost": _display_cost(cost_max),
             "rps": tier["rps"], "heat": tier["heat"],
             "can_afford": one <= requests,
         })

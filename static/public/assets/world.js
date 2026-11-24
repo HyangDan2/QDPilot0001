@@ -664,6 +664,7 @@ function init() {
   const lowMotion = getLowMotion();
   document.documentElement.dataset.motion = lowMotion ? "low" : "auto";
   scene = new WorldScene($("scene"), { lowMotion });
+  window.__scene = scene;
   setLowMotion(lowMotion);
   wire();
   setSync("접속 중…");

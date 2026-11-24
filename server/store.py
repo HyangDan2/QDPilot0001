@@ -263,6 +263,7 @@ class Store:
                     action_json TEXT,
                     result_json TEXT
                 ) WITHOUT ROWID;
+                CREATE INDEX IF NOT EXISTS world_ops_created_at ON world_ops (created_at);
                 CREATE TABLE IF NOT EXISTS world_events (
                     id           INTEGER PRIMARY KEY AUTOINCREMENT,
                     created_at   REAL NOT NULL,
@@ -493,19 +494,38 @@ class Store:
             handle.close()
 
     def readiness(self):
+        """Report storage health for monitoring.
+
+        ``ok`` is true only when the required ``world`` row is present and
+        parseable, the schema is exactly this release's version, and the data
+        volume keeps the minimum free space. Sizes, versions and backups stay in
+        the returned dict for server-side diagnostics; the HTTP layer exposes
+        only the three ``checks`` booleans to callers.
+        """
         try:
             con = self._connect()
             try:
                 version = int(con.execute("PRAGMA user_version").fetchone()[0])
-                con.execute("SELECT 1 FROM world WHERE id = 1").fetchone()
+                row = con.execute("SELECT state_json FROM world WHERE id = 1").fetchone()
             finally:
                 con.close()
+            world_ok = False
+            if row is not None:
+                try:
+                    world_ok = isinstance(json.loads(row["state_json"]), dict)
+                except (TypeError, ValueError):
+                    world_ok = False
             usage = shutil.disk_usage(os.path.dirname(os.path.abspath(self.path)))
             backups = 0
             if os.path.isdir(self.backup_dir):
                 backups = sum(1 for name in os.listdir(self.backup_dir) if name.endswith(".sqlite3"))
+            schema_ok = version == SCHEMA_VERSION
+            disk_ok = usage.free >= MIN_FREE_BYTES
             return {
-                "ok": version <= SCHEMA_VERSION and usage.free >= MIN_FREE_BYTES,
+                "ok": world_ok and schema_ok and disk_ok,
+                "world": world_ok,
+                "schema": schema_ok,
+                "disk": disk_ok,
                 "schemaVersion": version,
                 "expectedSchemaVersion": SCHEMA_VERSION,
                 "dbBytes": os.path.getsize(self.path),
@@ -513,7 +533,14 @@ class Store:
                 "backupCount": backups,
             }
         except (sqlite3.Error, OSError):
-            return {"ok": False, "schemaVersion": None, "expectedSchemaVersion": SCHEMA_VERSION}
+            return {
+                "ok": False,
+                "world": False,
+                "schema": False,
+                "disk": False,
+                "schemaVersion": None,
+                "expectedSchemaVersion": SCHEMA_VERSION,
+            }
 
     def hard_reset(self, now=None, op_id=None, actor=""):
         """Back up the database, then zero the world. Fails closed on backup error.

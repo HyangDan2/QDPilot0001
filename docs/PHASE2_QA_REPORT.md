@@ -2,9 +2,16 @@
 
 - 대상: `feature/phase2-core-evolution` (base `main` `326709d`)
 - 작성일: 2026-11-25 (KST)
-- 결론: 자동 테스트 128개 통과(개발 호스트·Raspberry Pi 모두), 2F 필수 매트릭스 전 항목 실행 완료.
+- 결론: Phase 2 제출 시점 자동 테스트 128개 통과(개발 호스트·Raspberry Pi 모두), 2F 매트릭스는
+  아래 표의 범위에서 실행했습니다. **Phase 2.1 교정 후에는 Python 187개 + Node 22개가 통과**하며,
+  최신 결과는 [`PHASE2_1_QA_REPORT.md`](PHASE2_1_QA_REPORT.md)를 따릅니다.
   **운영 Nginx 경유·WAN 관전자·실기 디스플레이는 미실측이며**, Raspberry Pi는 1차 실측(서버 부하 +
-  headless 브라우저)만 수행했습니다.
+  headless 브라우저)만 수행했습니다. 모바일 실기 Safari, 운영 SSO 역할 검증, 운영 DB 마이그레이션은
+  실행하지 않았습니다.
+
+> **정정**: 이 문서의 128개 수치와 왼쪽 기본 facing은 Phase 2(`bd63a75`) 시점 기록입니다. Phase 2.1
+> WO-08에서 자산별 `facing`(향단이 원본 오른쪽)으로 바뀌었고, 브라우저 장시간 실행은 목표 1시간에
+> 미달한 47분입니다. 아래 해당 항목에 정정을 표기했습니다.
 
 ## 1. 검증 환경
 
@@ -23,6 +30,7 @@
 ## 2. 자동 테스트
 
 ```text
+# Phase 2 제출 시점 (bd63a75)
 $ python3 -m unittest discover -s tests -t .
 Ran 128 tests in 8.559s
 
@@ -32,11 +40,20 @@ OK
 Ran 128 tests in 19.704s
 
 OK
+
+# Phase 2.1 교정 후 (현재 트리)
+$ python3 -m unittest discover -s tests -t .
+Ran 187 tests in 10.411s
+
+OK
+
+$ node --test tests/js/sprite_manifest.test.mjs tests/js/op_coordinator.test.mjs
+# pass 22
 ```
 
-- 기준선(main): 61개 → 현재: 128개. 신규 70개, 기존 3개는 더 엄격한 테스트로 대체(손실 없음).
-- 파일별: `test_api.py` 34, `test_economy.py` 46, `test_store.py` 36, `test_backup.py` 4, `test_content.py` 8.
-- 신규 테스트 목록과 대체 관계는 [구현 보고서 12장](PHASE2_IMPLEMENTATION_REPORT.md#12-신규-테스트-및-실행-결과).
+- 기준선(main): 61개 → Phase 2: 128개 → Phase 2.1: 187개. 기존 테스트 삭제·통과 조건 완화 없음.
+  Phase 2.1 신규 파일: `test_world_revision.py`, `test_backup_hardening.py`, `test_checkpoints.py`,
+  `test_economy_limits.py`, `test_hard_reset.py`, `test_ops_hardening.py`, Node `tests/js/*.test.mjs`.
 
 ## 3. 2F 필수 QA 매트릭스
 
@@ -51,12 +68,12 @@ OK
 | DB | 백업·복원 | `BackupTests` 4종, `test_restore_rolls_back…`, restore 후 `quick_check` | PASS |
 | 이벤트 | 커서 복구·순서 보장 | `test_public_events_are_ordered…`, `test_cursor_past…`, `test_retention_prunes…` | PASS |
 | 엔진 | State 전환 | CDP: idle→run→attack→repair, levelup 원샷 mid/after 스크린샷 | PASS |
-| 엔진 | 방향·Anchor | 매니페스트 `[0.5,1.0]`·`facing:left`, 이동 방향에 따른 반전 스크린샷 | PASS |
+| 엔진 | 방향·Anchor | 매니페스트 `[0.5,1.0]`·자산별 `facing`(향단이 원본 오른쪽, 버그 왼쪽), 이동 방향에 따른 반전 스크린샷 | PASS (WO-08에서 정정) |
 | 엔진 | 공격 거리·타격 판정 | 90초 CDP 추적: 공격 12회, 목표 갱신 55회, `hit` 상태 진입, 오류 0 | PASS |
 | 엔진 | 설비 수량·랙 표시 | `room.js` 슬롯 계산 + 320~1920 스크린샷, 보유 0 티어 미표시 | PASS |
 | 엔진 | 에셋 누락 Fallback | 시트 `null` 상태에서 단일 PNG fallback으로 전 상태 재생 | PASS |
 | UI | 320/390/768/1440/1920px | 5개 폭 스크린샷, FPS 60, 콘솔 오류 0, 가로 스크롤 0 | PASS |
-| UI | 장시간 실행 | 브라우저 47분 연속 실행, FPS/힙/오류 샘플링 | PASS (6장) |
+| UI | 장시간 실행 | 브라우저 47분 연속 실행, FPS/힙/오류 샘플링 | **PARTIAL — 목표 1시간 대비 47분**(6.2) |
 | 운영 | DB 마이그레이션·롤백 | `test_v1_database_upgrades_in_place…`(v1 스키마 실 DB), 신버전 거부, pre-deploy 복구 절차 | PASS (운영 미적용) |
 | 성능 | Pi 1차 재측정 | Pi 테스트 128 OK, 1/10/100명+soak 전부 200·lock 0, headless FPS 18~21 (6.3장) | PASS (서버) |
 
@@ -101,9 +118,10 @@ Reduced Motion 결과: [qa-ui-reduced.jpg](images/phase2/qa-ui-reduced.jpg) (버
 - 관리자 폴링 로그: 450/450 HTTP 200 (`/tmp/soak-admin-loop.log`)
 - RSS: 15.9MiB 고정(719회 샘플 최대도 15.9MiB, 증가 없음)
 
-### 6.2 브라우저 (47분)
+### 6.2 브라우저 (47분, 목표 1시간 미달)
 
-- headless Chrome 1440×900, `?fps=1`로 공개 월드 유지, 60초 간격 샘플
+- headless Chrome 1440×900, `?fps=1`로 공개 월드 유지, 60초 간격 샘플. 47분에서 세션이 끝나
+  **1시간 목표에는 미달**했으며, Phase 2.1 릴리스 게이트에서 1시간 재실행 결과를 별도 기록합니다.
 - 결과: 48샘플 전부 FPS 60 · JS 힙 2.31→5.04MiB(중앙값 2.97, 최대 5.65, 단조 증가 없음) ·
   콘솔 오류 0 · 월드 레벨 1→2 정상 진행 · 가로 스크롤 없음 —
   [qa-ui-soak-final.jpg](images/phase2/qa-ui-soak-final.jpg)
@@ -150,13 +168,17 @@ Reduced Motion 결과: [qa-ui-reduced.jpg](images/phase2/qa-ui-reduced.jpg) (버
 
 ## 9. 미실행·한계
 
-- **운영 서버(Nginx 경유) 및 실기 디스플레이 미실측**: Pi 1차는 임시 인스턴스(루프백)와 headless
-  Chromium뿐입니다. GPU 있는 실기 브라우저 FPS는 확인하지 않았습니다.
+- **운영 서버(Nginx 경유) 및 실기 디스플레이 미실측**: Pi 1차는 Phase 2 시점(`bd63a75`) 임시 인스턴스
+  (루프백)와 headless Chromium뿐입니다. Phase 2.1 이후 Pi 재측정, GPU 있는 실기 브라우저 FPS는
+  확인하지 않았습니다.
+- **운영 SSO 역할 검증 미실행**: Hard Reset의 admiral+chairman 이중 신호는 헤더 주입 테스트로만
+  검증했습니다. 운영 Nginx에서 실제 chairman 계정으로 확인하지 않았습니다.
 - 실제 다중 네트워크 클라이언트가 아닌 한 호스트의 멀티프로세스 관전자입니다. WAN 지연·프록시는 미측정.
   Pi 측정도 하네스 클라이언트가 서버와 같은 4코어를 공유했습니다.
 - 모바일 실기기(Safari/Firefox) 미검증. Chrome 에뮬레이션(DPR 1)만 확인했습니다.
-- 카메라 줌/팬, 쿨링 시각화는 구현 전이라 검증 대상이 아닙니다.
+- 카메라 줌/팬, 쿨링 시각화는 구현 전이라 검증 대상이 아닙니다(발열 70% 비네트만 구현).
 - 운영 DB 마이그레이션은 실행하지 않았습니다(배포 금지). 로컬 복제 DB와 테스트로만 검증했습니다.
+- Nginx `limit_req` 부하 테스트는 실행하지 않았습니다(정책만 문서화).
 
 ## 10. 재현 방법
 

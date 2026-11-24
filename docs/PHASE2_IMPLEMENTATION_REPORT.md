@@ -5,6 +5,15 @@
 - 작성일: 2026-11-25 (KST)
 - 상태: **PO 리뷰 요청** — 운영 배포·main 병합은 수행하지 않았습니다.
 
+> **Phase 2.1 정정(2026-11-25)**: 이 문서는 Phase 2 제출(`bd63a75` 계열) 시점 기록입니다.
+> 이후 교정 워크오더(WO-01~08)로 테스트 수(128→187 Python, +22 Node), 스프라이트 방향
+> (왼쪽→자산별 `facing`, 향단이 원본은 오른쪽), manifest v2→v3 지연 로딩, 스키마 v2→v4,
+> readiness 응답(상세 `storage`→불리언 `checks`)이 바뀌었습니다. 본문의 해당 부분에는
+> 정정을 반영했고, 최신 결과는
+> [`PHASE2_1_CORRECTION_REPORT.md`](PHASE2_1_CORRECTION_REPORT.md),
+> [`PHASE2_1_QA_REPORT.md`](PHASE2_1_QA_REPORT.md),
+> [`PHASE2_1_RELEASE_GATE.md`](PHASE2_1_RELEASE_GATE.md)를 따릅니다.
+
 이 문서는 구현 범위와 근거를 정리합니다. QA 결과·성능 수치는
 [`PHASE2_QA_REPORT.md`](PHASE2_QA_REPORT.md), [`PERFORMANCE_REPORT.md`](PERFORMANCE_REPORT.md)에,
 경제·연출·아트·DB 규격은 각각 [`ECONOMY_SPEC.md`](ECONOMY_SPEC.md), [`ANIMATION_SPEC.md`](ANIMATION_SPEC.md),
@@ -28,10 +37,12 @@
 
 - Python 3.13.2(표준 라이브러리만), SQLite 3.45.3(WAL), Vanilla ES 모듈 + Canvas 2D
 - 로컬 검증 호스트: macOS 15.7.9(Apple M1, arm64) 개발 머신
-- Raspberry Pi 1차 실측(2026-11-25): `hyogidevrsp`(aarch64 4코어, Debian 12, Python 3.11.2)에 브랜치를
-  임시 클론해 128개 테스트 OK, 공개 1/10/100명·soak 전 구간 HTTP 200·lock 0, headless Chromium FPS
-  18~21을 확인했습니다(운영 Nginx 경유·실기 디스플레이는 미실측).
-- 테스트: `python3 -m unittest discover -s tests -t .` → 128개 통과(기준선 61개)
+- Raspberry Pi 1차 실측(2026-11-25, **Phase 2 시점 `bd63a75`**): `hyogidevrsp`(aarch64 4코어, Debian 12,
+  Python 3.11.2)에 브랜치를 임시 클론해 128개 테스트 OK, 공개 1/10/100명·soak 전 구간 HTTP 200·lock 0,
+  headless Chromium FPS 18~21을 확인했습니다(운영 Nginx 경유·실기 디스플레이는 미실측). **Phase 2.1
+  교정 이후 Pi 재측정은 아직 수행하지 않았습니다.**
+- 테스트: `python3 -m unittest discover -s tests -t .` → **187개 통과**(Phase 2 기준선 61개 →
+  Phase 2 128개 → Phase 2.1 187개). Node 테스트 22개(`node --test tests/js/*.test.mjs`)도 통과합니다.
 
 ## 3. Phase 2A — 게임 경제 엔진 안정화
 
@@ -90,8 +101,10 @@ Public GET ──► SnapshotCache(read-only conn, TTL 1s, single-flight) ──
   읽기 전용 연결(`mode=ro`)로 복사해 메모리에서 현재 시각까지 정산 후 TTL 1초 동안 공유합니다.
 - 단일 락으로 single-flight 갱신 → 동시 100명도 TTL 구간당 1회 읽기. 관리자 액션 커밋 시
   `generation`이 올라가 즉시 무효화되므로 공개 뷰가 관리자 변경을 바로 봅니다.
-- Rate Limit: 요청당 비용이 읽기 1회/초 수준으로 낮아져 이번 단계에서는 도입하지 않았습니다
-  (워크오더의 "검토" 항목). 필요 시 Nginx `limit_req`로 붙일 수 있습니다.
+- Rate Limit: **서버 내장 제한은 두지 않았습니다.** 공개 GET 비용은 TTL 1초 스냅샷으로 읽기
+  1회/초 수준이고, 요청 본문은 8KiB, listen backlog는 128입니다. 외부 폭주는 Nginx
+  `limit_req`/`limit_conn`으로 막는 정책을 권고하며, **운영 Nginx 설정에는 아직 적용·검증하지
+  않았습니다**(정책 상세: [`PHASE2_1_CORRECTION_REPORT.md`](PHASE2_1_CORRECTION_REPORT.md) 5장).
 
 ### 2B-02 멱등 처리 (`9c1bbf9`)
 
@@ -124,10 +137,11 @@ Public GET ──► SnapshotCache(read-only conn, TTL 1s, single-flight) ──
   실패 시 파일 삭제 후 예외. `daily`(보존 14)·`pre-deploy`·`pre-hardreset`·`pre-restore`·`manual`.
 - 복구는 서비스 정지 상태에서 `pre-restore` 백업 → 스테이징 → `os.replace` → `quick_check` 순서이며,
   DB가 잡혀 있으면 중단합니다.
-- `user_version=2` 관리, 신버전 DB를 구버전 코드가 열면 `SchemaTooNew`로 기동 거부(롤백은 pre-deploy
-  백업 복구).
-- `GET /admin/idle-ops/api/v1/health/ready`가 스키마 버전·`world` 행·여유 공간(256MiB)을 반영,
-  실패 시 503. 절대 경로·비밀은 노출하지 않습니다.
+- `user_version=4` 관리(Phase 2.1에서 2→4), 신버전 DB를 구버전 코드가 열면 `SchemaTooNew`로 기동
+  거부(롤백은 pre-deploy 백업 복구).
+- `GET /admin/idle-ops/api/v1/health/ready`는 필수 `world` 행·스키마 버전 일치·여유 공간(256MiB)을
+  검증하고, 공개 응답에는 불리언 `checks`만 노출합니다(Phase 2.1에서 상세 `storage` 제거, 실패
+  상세는 서버 로그로 이동). 실패 시 503.
 - 절차 전문: [`DB_MIGRATION.md`](DB_MIGRATION.md).
 
 ## 5. Phase 2C — Canvas 게임 엔진 고도화
@@ -159,8 +173,10 @@ static/public/assets/
 - `Animator`는 상태별 프레임 수·FPS·loop, `restart`, `hitFrame` 도달 콜백, 완료 상태를 제공합니다.
   프레임마다 다른 지속 시간이 필요하면 상태에 `durations`(초 배열, 길이 = 프레임 수)를 주면 되고,
   없으면 균등 `1/fps`를 씁니다(현재 전 상태 균등).
-- 시트는 `horizontal-strip` 형식(셀 320×640)으로 슬라이스하며, 셀 크기 차이는 중앙 정렬로 보정합니다.
-  앵커는 `[0.5, 1.0]`(발 위치), 캐릭터 원본은 왼쪽을 보고, 이동 방향에 따라 `ctx.scale(-1, 1)`로 반전합니다.
+- 시트는 v2 `horizontal-strip`(셀 320×640)과 v3 `atlas`/`sequence`(768×768 셀)를 모두 읽습니다.
+  셀 크기 차이는 중앙 정렬로 보정합니다. 앵커는 `[0.5, 1.0]`(발 위치)이고, 캐릭터 원본 방향은
+  자산별 `facing`으로 선언합니다 — **현행 향단이 원본은 오른쪽**, 버그는 왼쪽입니다. 엔진은
+  바라보는 방향과 이동 방향이 다를 때만 반전합니다(Phase 2.1 WO-08에서 수정).
 - 시트가 없으면(`sheet: null`) 단일 PNG fallback으로 동작합니다. 이번 단계에서 신규 시트는 만들지
   않았고, fallback 경로만으로 모든 상태 전환을 검증했습니다.
 - 매니페스트는 `no-cache`로 재검증합니다(캐시된 구버전 매니페스트 문제 수정).
@@ -198,7 +214,9 @@ static/public/assets/
 - 탭이 숨겨지면 rAF 루프를 멈추고, Reduced Motion에서는 버그 이동·장식 파티클을 끕니다.
 - DPR은 2로 제한, 60Hz 고정 스텝 accumulator. `?fps=1`에서 FPS·프레임 타임 오버레이,
   `window.__scene.stats`로 자동화 측정이 가능합니다.
-- 장시간 실행: 브라우저 47분 연속 실행에서 JS 힙·FPS·콘솔 오류를 샘플링했습니다(QA 보고서 6장).
+- 장시간 실행: Phase 2에서 브라우저 **47분** 연속 실행으로 JS 힙·FPS·콘솔 오류를 샘플링했습니다
+  (목표 1시간에는 미달, QA 보고서 6.2). Phase 2.1 릴리스 게이트에서 1시간 재실행 결과를 별도
+  기록합니다.
 
 ## 6. Phase 2D — 향단이 아트워크 표준화 (`6566929`)
 
@@ -209,11 +227,15 @@ static/public/assets/
   때문입니다.
 - [`ART_DIRECTION.md`](ART_DIRECTION.md): 캐논 11항목 표, 팔레트 토큰, 실루엣, 시트 규격(320×640,
   최대 4096px 폭, 앵커·방향), bug 512×512, 연출은 이미지에 굽지 않음.
-- 매니페스트 v2: asset 버전·캐릭터·경로·애니메이션 타입·프레임 수·FPS·앵커·방향·hitFrame·loop·
-  fallback을 담습니다. **에셋별 개별 버전 필드는 넣지 않았습니다** — 현 단계는 캐릭터 단위 버전으로
-  충분하고, 개별 버전 관리가 필요해지면 필드를 추가하면 됩니다(가산적 변경).
-- 신규 아트 생성·기존 삭제·SVG 대체 없음. 제작 요청 목록은 [`ASSET_REQUIREMENTS.md`](ASSET_REQUIREMENTS.md)
-  (P0 수리 단일 이미지, P1 레벨업/설치 12@12, P2 idle/run/attack/repair 시트, P3 버그 시트).
+- 매니페스트는 Phase 2의 v2에서 **v3**로 확장했습니다(Phase 2.1 WO-08): 상태별 `source`
+  (strip/atlas/sequence), `fallback {file,facing}`, 자산별 `facing`, `anchor`/`anchors`,
+  `durations`/`seconds`, `hits`, `maxTexture`. v2는 계속 읽습니다(호환표:
+  [`ASSET_REQUIREMENTS_V3.md`](ASSET_REQUIREMENTS_V3.md) 6장). **에셋별 개별 버전 필드는 넣지
+  않았습니다** — 현 단계는 캐릭터 단위 버전으로 충분합니다.
+- 신규 아트 생성·기존 삭제·SVG 대체 없음. 제작 요청 목록은
+  [`ASSET_REQUIREMENTS_V3.md`](ASSET_REQUIREMENTS_V3.md)를 따릅니다(P0 수리, P1 레벨업/설치,
+  P2 idle/run/attack/repair, P3 버그 시트). 테스트용 번호 타일 아틀라스는 `tests/fixtures/`에만
+  있으며 배포되지 않습니다.
 
 ## 7. Phase 2E — 게임 콘텐츠 확장 설계 (`9073ed4`)
 
@@ -319,14 +341,35 @@ tools/qa_perf.py                (신규)
 | 2F | `cd936af` | listen backlog |
 | 2F | `b5fa2f4` | QA 하네스 |
 
+Phase 2.1 교정(별도 커밋, 각 WO별 독립):
+
+| WO | 커밋 | 내용 |
+| --- | --- | --- |
+| WO-01 | `72e6777` | Hard Reset을 백업 전부터 커밋 후까지 배타 게이트로 |
+| WO-02 | `c573334` | Hard Reset에 실제 chairman 계정 역할 요구 |
+| WO-03 | `fe0e77e` | 상한 정산·비용 가드·확인 지점 단조성 |
+| WO-04 | `93688f6` | 미검증 백업 거부·복원 가역성 |
+| WO-05 | `e48c998` | 관리자별 확인 지점 |
+| WO-06 | `3bf72df` | `world.revision`·스냅샷 일관 공개 읽기 |
+| WO-07 | `3b93a1a` | 관리자 변경 op 직렬화 |
+| WO-08 | `7c6cfc2` | 자산별 facing·manifest v3·지연 로딩·아트 문서 |
+| WO-09 | 이후 커밋 | readiness·타임아웃·보존 검토·보고서 정정 |
+| WO-10 | 이후 커밋 | 릴리스 게이트 회귀·장시간 실행·릴리스 문서 |
+
 이 보고서·QA 보고서·성능 보고서는 2F 문서 커밋 하나로 제출합니다(자기 SHA는 커밋 목록에 표기하지 않음).
 
 ## 12. 신규 테스트 및 실행 결과
 
-- 전체: **128개 통과** (기준선 main 61개 → 신규 70개, 기존 3개는 더 엄격한 테스트로 대체)
+- Phase 2 제출 시점: **128개 통과** (기준선 main 61개 → 신규 70개, 기존 3개는 더 엄격한 테스트로 대체)
+- Phase 2.1 시점(현재): **187개 통과** — `test_api.py` 34, `test_economy.py` 46, `test_store.py` 36,
+  `test_backup.py` 4, `test_content.py` 8, `test_backup_hardening.py`, `test_checkpoints.py`,
+  `test_economy_limits.py`, `test_hard_reset.py`, `test_ops_hardening.py`, `test_world_revision.py` 포함.
+- Node: `node --test tests/js/sprite_manifest.test.mjs tests/js/op_coordinator.test.mjs` → **22개 통과**
+  (manifest v3 정규화·슬라이스·facing·지연 로딩/쿨다운, 관리자 op 조정).
 - 실행 명령: `python3 -m unittest discover -s tests -t .`
-- 파일별: `test_api.py` 34(+14), `test_economy.py` 46(+17), `test_store.py` 36(+27),
-  `test_backup.py` 4(신규), `test_content.py` 8(신규)
+- 파일별(Phase 2 시점): `test_api.py` 34(+14), `test_economy.py` 46(+17), `test_store.py` 36(+27),
+  `test_backup.py` 4(신규), `test_content.py` 8(신규). Phase 2.1 신규 파일·케이스는
+  [`PHASE2_1_QA_REPORT.md`](PHASE2_1_QA_REPORT.md)에 정리했습니다.
 
 주요 신규 테스트:
 
@@ -348,13 +391,15 @@ API    중복 opId 재실행, 관리자/공개 타임스탬프, 공개 이벤트
 
 ## 13. DB 변경 및 마이그레이션 검증
 
-- `user_version` 0/1 → 2. 추가: `world_ops.action_json/result_json`, `admin_seen`, `audit_log`.
-  기존 컬럼 삭제·의미 변경 없음.
+- `user_version` 0/1 → 2(Phase 2) → 3(관리자 확인 지점) → 4(`world.revision`).
+  추가: `world_ops.action_json/result_json`, `admin_seen`, `audit_log`, `world.revision`,
+  `admin_seen.observed_*`, `world_ops(created_at)` 인덱스. 기존 컬럼 삭제·의미 변경 없음.
 - 기동 시 `CREATE TABLE IF NOT EXISTS` + 누락 컬럼 `ALTER TABLE`로 멱등 마이그레이션.
 - 검증(실행 완료):
   - v1 스키마(신규 컬럼·테이블 없음) DB를 열어 제자리 업그레이드되고 월드 상태가 보존되는지
     (`test_v1_database_upgrades_in_place_and_keeps_the_world`). 프리뷰 DB 스냅샷으로도 동일 절차를
-    수동 실행해 `user_version` 0/1→2, 컬럼·테이블 추가, `state_json` 바이트 동일을 확인했습니다.
+    수동 실행해 `user_version` 상향, 컬럼·테이블 추가, `state_json` 바이트 동일을 확인했습니다.
+    Phase 2.1에서 v2→v4 가산 마이그레이션이 같은 테스트로 커버됩니다.
   - 신버전 DB를 구버전 코드가 거부하는지 (`test_schema_version_is_recorded_and_newer_schemas_are_refused`)
   - 백업 생성→검증→복원→검증 왕복 (`test_daily_backups_are_verified_and_pruned`,
     `test_restore_rolls_back_to_a_verified_snapshot`)
@@ -365,10 +410,11 @@ API    중복 opId 재실행, 관리자/공개 타임스탬프, 공개 이벤트
 [`ASSET_REQUIREMENTS.md`](ASSET_REQUIREMENTS.md) 3~5장에 규격·체크리스트로 정리했습니다. 요약:
 
 - P0: 수리(repair) 전용 단일 이미지 1장 — 현재 idle 이미지로 대체 중
-- P1: levelup 12프레임@12fps, install 12프레임@12fps 시트(320×640 셀, 가로 스트립)
-- P2: idle 8@8, run 12@12, attack 12@16(hitFrame 6) 시트
-- P3: 버그 alive/hit 시트(512×512 셀)
-- 공통: 앵커 [0.5, 1.0], 왼쪽 보기, 4096px 이하, 연출(파티클·글로우)은 이미지에 굽지 않음
+- P1: levelup 12프레임@12fps, install 12프레임@12fps 시트
+- P2: idle 8@8, run 12@12, attack 12@16(히트 프레임 6), repair 8@10
+- P3: 버그 alive/hit 시트
+- 공통: v3 제작 캔버스 768×768, 자산별 `facing`(향단이 원본 오른쪽·버그 왼쪽), 앵커
+  `[0.5, 1.0]` 또는 프레임별 `anchors`, 4096px 이하, 연출(파티클·글로우)은 이미지에 굽지 않음
 
 ## 15. 운영 배포 및 복원 절차
 

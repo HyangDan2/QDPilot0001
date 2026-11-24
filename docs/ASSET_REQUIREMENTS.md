@@ -28,7 +28,9 @@
 | `static/public/assets/hero.jpg` | 1400×933, 200K | 공개 페이지 배경 일러스트 |
 | `static/public/assets/favicon.svg` | 64×64 | 파비콘 |
 
-시트는 모두 미납품 상태이며 `sprites/manifest.json`의 `sheet`가 `null`입니다.
+시트는 모두 미납품 상태이며 v3 `sprites/manifest.json`의 `source`가 `null`입니다(v2의 `sheet`
+문자열은 호환용으로만 읽습니다). 위 수치는 v2 시점 기록이며, 신규 납품 규격은
+[`ASSET_REQUIREMENTS_V3.md`](ASSET_REQUIREMENTS_V3.md)를 따릅니다.
 
 ## 요청 목록
 

@@ -95,6 +95,9 @@ def _reject_json_constant(token):
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "HD2LabIdleOps/1.1"
+    # Close idle keep-alive connections (and stalled request lines/bodies) so a
+    # slow or abandoned client cannot pin a worker thread indefinitely.
+    timeout = 20
     store = None
     snapshot = None
     dev_user = None
@@ -250,10 +253,23 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_ready(self):
         storage = self.store.readiness()
+        checks = {
+            "world": bool(storage.get("world")),
+            "schema": bool(storage.get("schema")),
+            "disk": bool(storage.get("disk")),
+        }
         ready = bool(storage.get("ok"))
+        if not ready:
+            # Sizes, schema versions and the database path stay out of the
+            # response; operators read them from the service log instead.
+            self.log_message(
+                "readiness degraded: world=%s schema=%s (%s/%s) disk=%s free=%s",
+                checks["world"], checks["schema"], storage.get("schemaVersion"),
+                storage.get("expectedSchemaVersion"), checks["disk"], storage.get("freeBytes"),
+            )
         self._json(
             200 if ready else 503,
-            {"status": "ok" if ready else "degraded", "service": "idle-ops", "storage": storage},
+            {"status": "ok" if ready else "degraded", "service": "idle-ops", "checks": checks},
         )
 
     def _handle_state(self, public=False):
@@ -448,6 +464,10 @@ class Server(ThreadingHTTPServer):
     # The stdlib default backlog is 5, which drops SYNs (and adds ~1s retry
     # latency) when many viewers connect at once. Accept bursts instead.
     request_queue_size = 128
+    # Handler threads are daemons so a stalled connection never blocks service
+    # shutdown; Handler.timeout bounds how long one connection may stay idle.
+    daemon_threads = True
+    allow_reuse_address = True
 
 
 def make_server(host, port, **kwargs):

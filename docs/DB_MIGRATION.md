@@ -9,9 +9,11 @@
 
 | 버전 | 내용 |
 | --- | --- |
-| 0 | 스키마 표식 이전(레거시). 기동 시 v2로 올린다. |
+| 0 | 스키마 표식 이전(레거시). 기동 시 최신 버전으로 올린다. |
 | 1 | 단일 `world` 행, `world_ops`(opId), `world_events`, 레거시 `players`, `action_ops` |
 | 2 | `world_ops.action_json/result_json`(멱등 재실행), `admin_seen`(관리자별 타임스탬프), `audit_log`(Hard Reset 감사) |
+| 3 | `admin_seen.observed_requests/observed_level/world_generation`(관리자별 확인 지점) |
+| 4 | `world.revision`(커밋마다 증가, 공개 스냅샷·이벤트 상한 정합) + `world_ops(created_at)` 인덱스 |
 
 - 기동 시 `Store.__init__`이 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE`(누락 컬럼)로
   멱등 마이그레이션을 수행하고 `user_version`을 올린다. 별도 마이그레이션 명령은 필요 없다.
@@ -31,11 +33,11 @@
 
 | kind | 생성 시점 | 보존 |
 | --- | --- | --- |
-| `daily` | 일 1회(스케줄) | 최근 `BACKUP_KEEP`(14)개 |
-| `pre-deploy` | 릴리스 배포 직전 | 수동 정리 |
-| `pre-hardreset` | Hard Reset 실행 직전(자동) | 수동 정리 |
-| `pre-restore` | 복구 실행 직전(자동) | 수동 정리 |
-| `manual` | 운영자 수동 | 수동 정리 |
+| `daily` | 일 1회(스케줄) | 같은 kind 최근 `BACKUP_KEEP`(14)개 |
+| `pre-deploy` | 릴리스 배포 직전 | CLI 기본 `--keep 14`; 전부 보관하려면 `--keep 0` |
+| `pre-hardreset` | Hard Reset 실행 직전(자동) | 자동 정리 없음(`keep=0`) — 수동 정리 |
+| `pre-restore` | 복구 실행 직전(자동) | 자동 정리 없음(`keep=0`) — 수동 정리 |
+| `manual` | 운영자 수동 | CLI 기본 `--keep 14` |
 
 ```bash
 # 일일 백업 (cron 예: 04:10 KST)
@@ -78,34 +80,45 @@ curl -fsS --unix-socket /run/hd2lab/idle-ops.sock \
 2. 새 릴리스 배치 → 재기동 → `health/ready` 200 확인 → 관리자/공개 화면 스모크 테스트
 3. 문제 시: 이전 릴리스로 되돌리고 3장 절차로 pre-deploy 백업 복구
 
-`user_version` 상향은 새 릴리스에서만 일어나며, 구버전 코드는 v2 DB를 열지 않고 거부한다
-(2장의 롤백 호환). 따라서 롤백 = 이전 바이너리 + pre-deploy 백업 복구다.
+`user_version` 상향은 새 릴리스에서만 일어나며, 구버전 코드는 더 높은 버전의 DB를 열지 않고 거부한다
+(1장의 롤백 호환). 따라서 롤백 = 이전 바이너리 + pre-deploy 백업 복구다.
 
 ## 5. Readiness
 
-`GET /admin/idle-ops/api/v1/health/ready`(인증 없음)는 저장소 상태를 반영한다.
+`GET /admin/idle-ops/api/v1/health/ready`(인증 없음)는 저장소 상태를 세 가지 불리언으로만 노출한다.
+크기·스키마 버전·경로·백업 개수는 응답에 넣지 않고, 실패 시 서비스 로그에만 남긴다.
 
 ```json
 {
   "status": "ok",
   "service": "idle-ops",
-  "storage": {
-    "ok": true,
-    "schemaVersion": 2,
-    "expectedSchemaVersion": 2,
-    "dbBytes": 40960,
-    "freeBytes": 9559822336,
-    "backupCount": 2
-  }
+  "checks": { "world": true, "schema": true, "disk": true }
 }
 ```
 
-- `status`/`storage.ok`는 DB 접속·`world` 행 존재·스키마 버전 일치·여유 공간(`MIN_FREE_BYTES`=256MiB)
-  기준이며, 실패 시 HTTP 503 + `status: "degraded"`를 반환한다.
-- 절대 경로·비밀·백업 디렉터리 경로는 노출하지 않는다(개수·크기만).
+- `checks.world`: 필수 `world` 행이 존재하고 `state_json`이 객체로 파싱된다.
+- `checks.schema`: `PRAGMA user_version`이 이 릴리스의 `SCHEMA_VERSION`과 **정확히 같다**.
+- `checks.disk`: 데이터 볼륨 여유 공간이 `MIN_FREE_BYTES`(256MiB) 이상이다.
+- 셋 중 하나라도 false면 HTTP 503 + `status: "degraded"`.
+- `Store.readiness()`는 내부 진단용 상세(`schemaVersion`, `dbBytes`, `freeBytes`, `backupCount`)를
+  계속 반환하지만 HTTP 계층은 이를 직렬화하지 않는다.
 - 공개 경로(`/idle-ops/`)에는 readiness를 노출하지 않는다.
 
-## 6. 하드 리셋과 감사 로그
+## 6. 보존·정리 정책
+
+| 대상 | 정책 | 근거 |
+| --- | --- | --- |
+| `world_ops` / 레거시 `action_ops` | 30일(`OP_TTL_SECONDS`) 초과 삭제. `world_ops`는 opId가 있는 모든 쓰기에서, 레거시 테이블은 기동 시 정리 | `world_ops(created_at)` 인덱스로 삭제 비용 고정 |
+| `world_events` | 최신 400개(`EVENT_RETENTION`)만 유지, 이벤트 생성 시 프루닝 | 공개 연출용 스트림, 복원 후 커서 재동기화 |
+| `audit_log` | 자동 삭제 없음(감사 기록 보존) | 액션 1건당 수백 바이트 수준, 디스크 증가는 완만 |
+| `admin_seen` | 관리자 1명당 1행 | 확인 지점만 저장 |
+| 백업 | 위 2장 표의 kind별 보존 | pre-hardreset/pre-restore는 자동 삭제하지 않음 |
+
+- 서버 메모리는 요청마다 열고 닫는 SQLite 연결, 단일 `SnapshotCache` 상태, `EVENT_LIMIT`/`EVENT_BYTES`
+  상한으로 제한된다. 요청 처리 스레드는 daemon이고 20초 읽기 타임아웃으로 유휴 연결이 스레드를
+  무한히 붙잡지 않는다.
+
+## 7. 하드 리셋과 감사 로그
 
 Hard Reset은 실행 직전 `pre-hardreset` 백업을 남기고, `audit_log`에 이전 상태 요약
 (`requests`, `run_lifetime`, `total_lifetime`, `tokens`, `reboots`, `achievements`, `op_id`, `backup`)을

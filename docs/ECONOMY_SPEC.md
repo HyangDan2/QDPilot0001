@@ -170,7 +170,7 @@ Reboot 횟수·업적은 유지합니다. 토큰은 개당 전체 RPS +2%입니�
   상태를 두 번 바꾸지 않고 동일 결과를 돌려줍니다.
 - 모든 상태 전이는 `BEGIN IMMEDIATE` 트랜잭션 안에서 처리하고, 시계도 트랜잭션 안에서
   읽습니다.
-- 저장은 SQLite WAL, 스키마 버전은 `PRAGMA user_version`(현재 2). 자세한 백업·복구는
+- 저장은 SQLite WAL, 스키마 버전은 `PRAGMA user_version`(현재 4). 자세한 백업·복구는
   [`DB_MIGRATION.md`](DB_MIGRATION.md).
 
 ## 14. 밸런스 변경 절차

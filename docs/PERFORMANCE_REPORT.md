@@ -4,6 +4,12 @@
 - 측정 호스트: **macOS 15.7.9 / Apple M1 (arm64) 개발 머신** — Raspberry Pi 및 운영 서버 실측이 아닙니다.
 - 대상: `feature/phase2-core-evolution` (비교 기준 `main` `326709d`)
 
+> **Phase 2.1 정정(2026-11-25)**: 2~6장은 Phase 2 제출 시점 값이고, 10장 Pi 실측은 `bd63a75`
+> (Phase 2.1 WO-01~08 이전) 클론에서 수행했습니다. 이후 manifest v3·지연 로딩·readiness 응답
+> 변경이 있었으므로 **Pi와 운영 경로는 재측정이 필요합니다**. 브라우저 장시간 실행은 목표 1시간에
+> 미달한 47분입니다. Phase 2.1 로컬 수치와 1시간 재실행은
+> [`PHASE2_1_PERFORMANCE_REPORT.md`](PHASE2_1_PERFORMANCE_REPORT.md)에 기록합니다.
+
 > 워크오더 원칙에 따라 이 문서의 수치는 "개발 호스트 실측"으로만 표기합니다. 운영 서버·Raspberry Pi
 > 성능으로 인용하지 마십시오. 운영 반영 전 동일 하네스로 Pi에서 재측정이 필요합니다(9장).
 
@@ -109,7 +115,7 @@ headless Chrome 158, CDP로 측정했습니다.
 
 ## 6. 장시간 실행 (브라우저)
 
-- headless Chrome, 1440×900, 공개 월드 `?fps=1`, 60초 간격 × 48회 샘플(47분)
+- headless Chrome, 1440×900, 공개 월드 `?fps=1`, 60초 간격 × 48회 샘플(47분 — **목표 1시간 미달**)
 - FPS: 48회 샘플 모두 60 (최소 60 · 최대 60)
 - JS 힙: 2.31MiB(첫 샘플) → 5.04MiB(마지막), 중앙값 2.97MiB · 최대 5.65MiB — 단조 증가 없이 톱니형 GC 패턴
 - 콘솔 오류: 0 (예외·로그 0건), 월드 레벨 1→2 정상 진행, 가로 스크롤 없음
@@ -151,8 +157,10 @@ headless Chrome 158, CDP로 측정했습니다.
 
 - 호스트: `hyogidevrsp` (Raspberry Pi, aarch64, 4 cores, 8GB, Debian 12 bookworm, Python 3.11.2).
   상시 운영 중인 Pi에서 **임시 인스턴스**로만 측정했고 운영 서비스 포트·DB는 건드리지 않았습니다.
-- 소스: GitHub `feature/phase2-core-evolution` `bd63a75` 클론, 임시 DB, `127.0.0.1:18233`, 루프백.
-- 자동 테스트: **128개 OK (19.7초)** — Pi의 Python 3.11에서도 동일하게 통과.
+- 소스: GitHub `feature/phase2-core-evolution` `bd63a75` 클론(Phase 2.1 교정 이전), 임시 DB,
+  `127.0.0.1:18233`, 루프백.
+- 자동 테스트: **128개 OK (19.7초)** — Pi의 Python 3.11에서도 동일하게 통과. Phase 2.1의 187개
+  테스트는 Pi에서 아직 재실행하지 않았습니다.
 
 | 시나리오 | 시간 | 요청 | HTTP | p50 | p95 | p99 | max |
 | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: |
@@ -165,8 +173,8 @@ headless Chrome 158, CDP로 측정했습니다.
 - 계약 위반 0, SQLite lock 오류 0. 서버 메모리 `VmRSS` 29.6MB, 시리즈 후 peak `VmHWM` 31.1MB.
 - 100명 구간 top 5초 샘플에서 CPU idle 88~90%(load average 1.4~1.75 / 4 cores)로 여유가 있었습니다.
 - 브라우저: Pi의 Chromium 155 headless, 1440×900, `?fps=1`, 5초×24샘플 — **FPS 18~21(중앙 19)**.
-  `--disable-gpu` 제거 + `--use-gl=egl` 재시도도 19~21로 동일했습니다. 콘솔 오류 0, 매니페스트 v2,
-  가로 스크롤 0 — [pi-headless-1440.jpg](images/phase2/pi-headless-1440.jpg)
+  `--disable-gpu` 제거 + `--use-gl=egl` 재시도도 19~21로 동일했습니다. 콘솔 오류 0, 매니페스트 v2
+  (당시), 가로 스크롤 0 — [pi-headless-1440.jpg](images/phase2/pi-headless-1440.jpg)
 - 해석: 서버 경로는 Pi에서도 100명·1초를 여유 있게 처리합니다. headless Chromium의 ~20 FPS는 GPU 없는
   headless 소프트웨어 렌더링 특성으로 보이며, **실기 디스플레이 키오스크 성능은 별도 확인이 필요**합니다.
   공개 관전자는 외부 기기 브라우저로 접속하므로 이 수치가 서버 배포를 막는 요소는 아닙니다.

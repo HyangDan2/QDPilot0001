@@ -160,4 +160,6 @@ reboot / reset    : 버그 제거, 이펙트 비움, idle로 복귀
 | 버그 | `bugs` | `bug-alive.png`, `bug-hit.png`(v3에서 facing 명시) | 좌동 |
 
 아틀라스 파일명·배치는 [`ASSET_REQUIREMENTS_V3.md`](ASSET_REQUIREMENTS_V3.md) 4장을 따릅니다.
-현행 manifest는 모든 `source`가 `null`이며 fallback으로 동작합니다.
+현행 manifest는 모든 `source`가 `null`이며 fallback으로 동작합니다. 회귀 테스트용 번호 타일
+아틀라스(`test-idle-4x2.png`, `test-run-4x3.png`)는 `tests/fixtures/sprites/`에만 있고 배포
+트리에는 포함되지 않습니다.

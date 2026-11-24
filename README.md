@@ -66,7 +66,7 @@ python3 -m unittest discover -s tests -t . -v
 
 ## 배포 (요약)
 
-운영 배치는 Server-HQ의 `docs/IDLE_OPS_OPERATIONS.md` 절차를 따릅니다. 요점:
+2026-11-24 운영(hyogidevrsp)에 배포했습니다: `https://hd2lab.duckdns.org/admin/idle-ops/` (관리자 SSO). 릴리스 `/opt/hd2lab-idle-ops/releases/20261124-235022`, systemd `hd2lab-idle-ops`, UDS `/run/hd2lab-idle-ops/api.sock`, DB `/var/lib/hd2lab-idle-ops/game.sqlite3`. 절차·검증·복원은 Server-HQ `docs/IDLE_OPS_OPERATIONS.md`를 따릅니다. 재배포 요점:
 
 - 정본 경로 `/admin/idle-ops/`, Nginx는 `admin-sso-page.conf`/`admin-sso-api.conf`로 보호하고 게임 백엔드는 `/run/hd2lab-idle-ops/api.sock`에만 바인딩합니다.
 - systemd `hd2lab-idle-ops.service`(전용 사용자, `StateDirectory=/var/lib/hd2lab-idle-ops`)로 실행합니다.

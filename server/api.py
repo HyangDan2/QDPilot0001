@@ -31,7 +31,14 @@ MAX_BODY = 8 * 1024
 OP_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 ACTION_TYPES = {"buyServer", "buyUpgrade", "reboot", "reset"}
 HARD_RESET_CONFIRM = "HARD RESET"
-OVERLORD_ROLE = "admiral"
+# Server-HQ admin-auth emits X-HD2Lab-Role=admiral for both Chairman/Overlord
+# accounts and accounts granted the admiral service role, so that header alone
+# cannot separate the top administrator from a regular admin. It also emits
+# X-HD2Lab-Account-Role=chairman only for the actual top administrator
+# (is_overlord or role == chairman). Nginx overwrites both headers from the
+# auth_request response. Destructive authority requires both signals.
+SERVICE_ROLE = "admiral"
+TOP_ADMIN_ACCOUNT_ROLE = "chairman"
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
@@ -89,6 +96,7 @@ class Handler(BaseHTTPRequestHandler):
     snapshot = None
     dev_user = None
     dev_role = None
+    dev_account_role = None
     static_root = None
     public_root = None
 
@@ -123,6 +131,19 @@ class Handler(BaseHTTPRequestHandler):
         if not role and self.dev_role:
             role = self.dev_role
         return role
+
+    def _account_role(self):
+        role = (self.headers.get("X-HD2Lab-Account-Role") or "").strip()
+        if not role and self.dev_account_role:
+            role = self.dev_account_role
+        return role
+
+    def _can_hard_reset(self):
+        return (
+            bool(self._username())
+            and self._role() == SERVICE_ROLE
+            and self._account_role() == TOP_ADMIN_ACCOUNT_ROLE
+        )
 
     def _read_json(self):
         try:
@@ -169,6 +190,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == ADMIN_API + "/content":
             self._handle_content()
+            return
+        if path == ADMIN_API + "/whoami":
+            self._handle_whoami()
             return
         if path == PUBLIC_API + "/state":
             self._handle_public_state()
@@ -255,6 +279,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._json(200, content.overview())
 
+    def _handle_whoami(self):
+        user = self._username()
+        if not user:
+            self._json(401, {"detail": "admin authentication required"})
+            return
+        # Only the caller's own trusted SSO headers are echoed back; the client
+        # uses canHardReset to hide a control it may not use. The server still
+        # enforces the same predicate on every hard-reset request.
+        self._json(200, {
+            "user": user,
+            "role": self._role(),
+            "accountRole": self._account_role(),
+            "canHardReset": self._can_hard_reset(),
+        })
+
     def _handle_action(self, reset=False):
         user = self._username()
         if not user:
@@ -305,8 +344,11 @@ class Handler(BaseHTTPRequestHandler):
         if not user:
             self._json(401, {"detail": "admin authentication required"})
             return
-        if self._role() != OVERLORD_ROLE:
-            self._json(403, {"detail": f"{OVERLORD_ROLE} role required"})
+        if self._role() != SERVICE_ROLE:
+            self._json(403, {"detail": f"{SERVICE_ROLE} service role required"})
+            return
+        if self._account_role() != TOP_ADMIN_ACCOUNT_ROLE:
+            self._json(403, {"detail": f"{TOP_ADMIN_ACCOUNT_ROLE} account role required"})
             return
         try:
             body = self._read_json()
@@ -373,7 +415,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
-def make_handler(store, dev_user=None, static_root=None, public_root=None, dev_role=None, snapshot=None):
+def make_handler(store, dev_user=None, static_root=None, public_root=None, dev_role=None, snapshot=None,
+                 dev_account_role=None):
     return type(
         "BoundHandler",
         (Handler,),
@@ -384,6 +427,7 @@ def make_handler(store, dev_user=None, static_root=None, public_root=None, dev_r
             "static_root": static_root,
             "public_root": public_root,
             "dev_role": dev_role,
+            "dev_account_role": dev_account_role,
         },
     )
 

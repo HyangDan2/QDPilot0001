@@ -58,13 +58,15 @@ class ApiTests(unittest.TestCase):
         cls.server.server_close()
         cls.tmp.cleanup()
 
-    def call(self, method, path, body=None, user=USER, raw_body=None, role=None):
+    def call(self, method, path, body=None, user=USER, raw_body=None, role=None, account_role=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         headers = {}
         if user:
             headers["X-HD2Lab-User"] = user
         if role:
             headers["X-HD2Lab-Role"] = role
+        if account_role:
+            headers["X-HD2Lab-Account-Role"] = account_role
         payload = raw_body
         if body is not None:
             payload = json.dumps(body)
@@ -286,16 +288,48 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(status, 403)
         self.assertIn("admiral", body["detail"])
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_role", "confirm": "HARD RESET"}, user="admiral", role="admiral",
+            account_role="crew",
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("chairman", body["detail"])
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_role", "confirm": "HARD RESET"}, user="admiral", role="admiral",
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("chairman", body["detail"])
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_role", "confirm": "HARD RESET"}, user="boss", role="chairman",
+        )
+        self.assertEqual(status, 403)
         status, _, _ = self.call(
             "POST", ADMIN + "/api/v1/hard-reset",
             body={"opId": "op_hard_role", "confirm": "HARD RESET"}, user=None,
         )
         self.assertEqual(status, 401)
 
+    def test_whoami_reports_only_the_callers_authority(self):
+        status, _, body = self.call("GET", ADMIN + "/api/v1/whoami", user="boss", role="admiral",
+                                    account_role="chairman")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["user"], "boss")
+        self.assertTrue(body["canHardReset"])
+        status, _, body = self.call("GET", ADMIN + "/api/v1/whoami", user="admin", role="admiral",
+                                    account_role="crew")
+        self.assertEqual(status, 200)
+        self.assertFalse(body["canHardReset"])
+        status, _, _ = self.call("GET", ADMIN + "/api/v1/whoami", user=None, role="admiral")
+        self.assertEqual(status, 401)
+
     def test_hard_reset_requires_exact_confirmation(self):
         status, _, body = self.call(
             "POST", ADMIN + "/api/v1/hard-reset",
             body={"opId": "op_hard_conf", "confirm": "hard reset"}, user="boss", role="admiral",
+            account_role="chairman",
         )
         self.assertEqual(status, 400)
         self.assertIn("HARD RESET", body["detail"])
@@ -305,6 +339,7 @@ class ApiTests(unittest.TestCase):
         status, _, body = self.call(
             "POST", ADMIN + "/api/v1/hard-reset",
             body={"opId": "op_hard_ok_1", "confirm": "HARD RESET"}, user="boss", role="admiral",
+            account_role="chairman",
         )
         self.assertEqual(status, 200)
         self.assertEqual(body["state"]["tokens"], 0)

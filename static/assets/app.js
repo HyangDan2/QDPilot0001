@@ -79,6 +79,7 @@ const game = {
   payload: null,
   pending: false,
   authError: false,
+  canHardReset: false,
   qty: 1,
   tab: "build",
   failures: 0,
@@ -245,7 +246,10 @@ function localizeError(detail) {
   if (!navigator.onLine) return "오프라인 상태입니다. 연결을 확인하세요.";
   const rules = [
     [/not enough requests/i, "요청이 부족합니다."],
-    [/admiral role required/i, "최고 관리자(admiral) 권한이 필요합니다."],
+    [/admiral role required/i, "최고 관리자(admiral) 서비스 권한이 필요합니다."],
+    [/admiral service role required/i, "최고 관리자(admiral) 서비스 권한이 필요합니다."],
+    [/chairman account role required/i, "Chairman 계정만 Hard Reset을 실행할 수 있습니다."],
+    [/in progress; retry shortly/i, "다른 작업이 진행 중입니다. 잠시 후 다시 시도하세요."],
     [/already used for a different action/i, "같은 작업 번호가 다른 요청에 사용되었습니다. 새로고침 후 다시 시도하세요."],
     [/already maxed/i, "이미 최대 레벨입니다."],
     [/not available yet/i, "아직 Reboot할 수 없습니다."],
@@ -636,6 +640,23 @@ function accept(data) {
 
 /* ---------- data flow ---------- */
 
+function applyIdentity(data) {
+  game.canHardReset = Boolean(data && data.canHardReset);
+  els.hardResetOpen.hidden = !game.canHardReset;
+  els.hardResetOpen.disabled = !game.canHardReset;
+}
+
+async function loadIdentity() {
+  try {
+    const data = await request(`${API}/whoami`);
+    applyIdentity(data);
+  } catch (error) {
+    // Fail closed: the hard-reset control stays hidden unless the server
+    // confirms the chairman account role. The server enforces it again.
+    applyIdentity(null);
+  }
+}
+
 async function load({ initial = false } = {}) {
   if (game.pending || game.authError) return;
   const seq = ++requestSeq;
@@ -819,9 +840,12 @@ function bindDialogs() {
     if (data) els.resetDialog.close();
   });
   const syncHardResetInput = () => {
-    els.hardResetConfirm.disabled = els.hardResetInput.value !== "HARD RESET";
+    els.hardResetConfirm.disabled = !game.canHardReset || els.hardResetInput.value !== "HARD RESET";
   };
+  els.hardResetOpen.hidden = true;
+  els.hardResetOpen.disabled = true;
   els.hardResetOpen.addEventListener("click", () => {
+    if (!game.canHardReset) return;
     els.hardResetInput.value = "";
     syncHardResetInput();
     els.hardResetDialog.showModal();
@@ -830,7 +854,7 @@ function bindDialogs() {
   els.hardResetInput.addEventListener("input", syncHardResetInput);
   els.hardResetCancel.addEventListener("click", () => els.hardResetDialog.close());
   els.hardResetConfirm.addEventListener("click", async () => {
-    if (els.hardResetInput.value !== "HARD RESET") return;
+    if (!game.canHardReset || els.hardResetInput.value !== "HARD RESET") return;
     const data = await submitAction(null, { hardReset: true });
     if (data) {
       els.hardResetDialog.close();
@@ -959,6 +983,7 @@ function init() {
   selectTab(game.tab);
   renderLog();
   resolvePendingOp();
+  loadIdentity();
   load({ initial: true });
   window.setInterval(() => {
     if (document.hidden || game.pending || game.authError) return;

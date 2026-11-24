@@ -69,8 +69,17 @@ python3 -m server --dev-user hd2service --static-root static --public-root stati
 | 〃 | `{"opId":"...","action":{"type":"buyUpgrade","id":"network"}}` |
 | 〃 | `{"opId":"...","action":{"type":"reboot"}}` |
 | `POST /reset` | `{"opId":"..."}` — 월드 초기화(토큰·레벨·업적 유지) |
+| `POST /hard-reset` | `{"opId":"...","confirm":"HARD RESET"}` — Chairman 전용(admiral 서비스 권한 + chairman 계정 역할) |
+| `GET /whoami` | 호출자의 신뢰된 SSO 역할과 `canHardReset` (UI에서 위험 버튼 숨김용, 서버가 다시 강제) |
 | `GET /content` | 밸런스 버전·지문·피처 플래그(기본 off)·임계값 (상태 미포함) |
-| `GET /health/ready` | `{"status":"ok","service":"idle-ops","storage":{...}}` — 저장소·스키마·여유 공간 반영, 실패 시 503 (인증 없음) |
+| `GET /health/ready` | `{"status":"ok","service":"idle-ops",...}` — 실패 시 503 (인증 없음) |
+
+Hard Reset 권한은 Server-HQ admin-auth의 실제 계정 체계를 따릅니다. `admiral_only` 서비스에서
+`X-HD2Lab-Role`은 Chairman과 grant된 admiral 모두에게 `admiral`로 내려오므로, 파괴적 권한은
+추가로 `X-HD2Lab-Account-Role: chairman`(실제 최고 관리자: `is_overlord` 또는 `role=chairman`)을
+요구합니다. 헤더가 없거나 해석할 수 없으면 거부합니다(fail closed). Nginx가 두 헤더를 SSO 결과로
+덮어쓰므로 클라이언트가 역할을 위조할 수 없습니다. 배포 시
+`deploy/nginx-idle-ops-account-role.patch`를 적용해야 합니다.
 
 공개 경로 기준: `/idle-ops/api/v1`
 

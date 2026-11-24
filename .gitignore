@@ -15,6 +15,15 @@ dist/
 build/
 coverage/
 
+# Runtime data (로컬 게임 DB)
+data/
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
 # IDE
 .idea/
 .vscode/

@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="ko" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#FAFAFD">
+  <meta name="robots" content="noindex, nofollow">
+  <title>HD2Lab Idle Ops</title>
+  <meta name="description" content="HD2Lab Idle Ops - a server-authoritative idle data center.">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <script>
+    (function () {
+      try {
+        var theme = localStorage.getItem('hd2lab-theme');
+        if (theme !== 'dark' && theme !== 'light') {
+          theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+        if (window.self !== window.top) {
+          document.documentElement.dataset.embedded = 'launcher';
+        }
+      } catch (error) { /* theme is cosmetic */ }
+    })();
+  </script>
+  <link rel="stylesheet" href="assets/styles.css">
+  <script type="module" src="assets/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">본문으로 건너뛰기</a>
+
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <a class="brand" href="./" aria-label="HD2Lab Idle Ops 홈">
+        <span class="mark" aria-hidden="true"></span>
+        <span class="brand-text">HD2Lab <small>Idle Ops</small></span>
+      </a>
+      <div class="top-actions">
+        <span id="sync-state" class="sync" role="status">동기화 중…</span>
+        <button id="theme-toggle" class="icon-button" type="button" aria-label="라이트/다크 테마 전환">
+          <span aria-hidden="true">◐</span>
+        </button>
+        <button id="help-open" class="icon-button" type="button" aria-label="도움말 열기">
+          <span aria-hidden="true">?</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main" class="shell">
+    <section id="auth-panel" class="panel auth-panel" hidden>
+      <h1>관리자 로그인이 필요합니다</h1>
+      <p>이 게임은 Server-HQ 공통 SSO로 보호됩니다. 로그인 후 돌아오면 서버에 저장된 진행도가 이어집니다.</p>
+      <a class="button primary" href="/auth/login?next=/admin/idle-ops/">로그인</a>
+    </section>
+
+    <section id="error-banner" class="banner" role="alert" hidden>
+      <span id="error-text">서버에 연결하지 못했습니다.</span>
+      <button id="retry-button" class="button small" type="button">다시 시도</button>
+    </section>
+
+    <section class="level-strip" aria-labelledby="level-title">
+      <div class="level-head">
+        <div>
+          <p class="kicker">OPERATOR LEVEL</p>
+          <h1 id="level-title">가동 레벨 <strong id="level-value">–</strong></h1>
+        </div>
+        <p id="level-bonus" class="level-bonus">서버 보너스 –</p>
+      </div>
+      <div class="level-track" role="progressbar" aria-labelledby="level-title" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="level-progress">
+        <span id="level-bar"></span>
+      </div>
+      <p id="level-next" class="level-next">다음 레벨까지 –</p>
+    </section>
+
+    <section class="stats-grid" aria-label="운영 현황">
+      <article class="stat-card">
+        <p class="stat-label">보유 요청</p>
+        <p class="stat-value" id="stat-requests">–</p>
+        <p class="stat-foot">누적 <span id="stat-lifetime">–</span></p>
+      </article>
+      <article class="stat-card">
+        <p class="stat-label">초당 처리</p>
+        <p class="stat-value" id="stat-rps">–</p>
+        <p class="stat-foot">기본 <span id="stat-base-rps">–</span></p>
+      </article>
+      <article class="stat-card">
+        <p class="stat-label">열 부하</p>
+        <p class="stat-value" id="stat-thermal">–</p>
+        <div class="mini-track" aria-hidden="true"><span id="thermal-bar"></span></div>
+        <p class="stat-foot">냉각 용량 <span id="stat-cooling">–</span></p>
+      </article>
+      <article class="stat-card">
+        <p class="stat-label">가동 토큰</p>
+        <p class="stat-value" id="stat-tokens">–</p>
+        <p class="stat-foot">Reboot <span id="stat-reboots">–</span>회</p>
+      </article>
+    </section>
+
+    <div class="game-grid">
+      <section class="panel rack-panel" aria-labelledby="rack-title">
+        <div class="panel-head">
+          <div>
+            <p class="kicker">SERVER ROOM</p>
+            <h2 id="rack-title">서버실</h2>
+          </div>
+          <p id="rack-summary" class="panel-note">–</p>
+        </div>
+        <div id="rack-grid" class="rack-grid"></div>
+        <div id="rack-empty" class="empty" hidden>아직 설치된 서버가 없습니다.</div>
+        <div class="rack-foot">
+          <span id="efficiency-label">효율 –</span>
+          <span>서버는 닫아도 서버에서 계속 처리됩니다.</span>
+        </div>
+      </section>
+
+      <section class="panel control-panel" aria-labelledby="control-title">
+        <h2 id="control-title" class="sr-only">운영 컨트롤</h2>
+        <div class="tabs" role="tablist" aria-label="운영 메뉴">
+          <button class="tab is-active" type="button" role="tab" aria-selected="true" aria-controls="tab-build" id="tab-button-build" data-tab="build">증설</button>
+          <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="tab-upgrades" id="tab-button-upgrades" data-tab="upgrades">업그레이드</button>
+          <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="tab-prestige" id="tab-button-prestige" data-tab="prestige">Reboot</button>
+          <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="tab-records" id="tab-button-records" data-tab="records">기록</button>
+        </div>
+
+        <section id="tab-build" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-build">
+          <div class="build-toolbar">
+            <p class="panel-note">서버를 사면 처리량이 늘고 발열도 늘어납니다.</p>
+            <div class="qty-group" role="group" aria-label="구매 수량">
+              <button class="qty is-active" type="button" data-qty="1">×1</button>
+              <button class="qty" type="button" data-qty="10">×10</button>
+              <button class="qty" type="button" data-qty="max">최대</button>
+            </div>
+          </div>
+          <div id="build-list" class="list"></div>
+        </section>
+
+        <section id="tab-upgrades" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-upgrades" hidden>
+          <p class="panel-note">영구 업그레이드입니다. Reboot 후에는 초기화됩니다.</p>
+          <div id="upgrade-list" class="list"></div>
+        </section>
+
+        <section id="tab-prestige" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-prestige" hidden>
+          <div class="prestige-box">
+            <p class="kicker">REBOOT</p>
+            <h3>서버실을 초기화하고 영구 배율을 얻습니다</h3>
+            <p>현재 런 누적 요청이 100만 이상이면 Reboot할 수 있습니다. 보유 서버·업그레이드·요청은 초기화되지만 <strong>가동 토큰</strong>, 업적, 운영 레벨은 유지됩니다.</p>
+            <div class="prestige-progress">
+              <div class="mini-track" aria-hidden="true"><span id="reboot-bar"></span></div>
+              <p id="reboot-info">–</p>
+            </div>
+            <button id="reboot-open" class="button danger" type="button" disabled>Reboot</button>
+          </div>
+          <div class="prestige-stats">
+            <div><span>보유 토큰</span><strong id="prestige-tokens">–</strong></div>
+            <div><span>토큰 배율</span><strong id="prestige-multiplier">–</strong></div>
+            <div><span>이번 런</span><strong id="prestige-run">–</strong></div>
+          </div>
+        </section>
+
+        <section id="tab-records" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-records" hidden>
+          <h3 class="subhead">업적 <span id="achievement-count" class="muted"></span></h3>
+          <div id="achievement-list" class="achievement-list"></div>
+          <h3 class="subhead">통계</h3>
+          <dl id="stats-list" class="stats-list"></dl>
+        </section>
+      </section>
+    </div>
+
+    <section class="panel log-panel" aria-labelledby="log-title">
+      <div class="panel-head">
+        <h2 id="log-title">활동 기록</h2>
+        <p class="panel-note">이번 화면에서 일어난 일만 표시됩니다.</p>
+      </div>
+      <ol id="log-list" class="log-list" aria-live="polite"></ol>
+    </section>
+  </main>
+
+  <footer class="footer shell">
+    <div>
+      <strong>HD2Lab Idle Ops</strong>
+      <p>서버 권위 시뮬레이션 · <span id="footer-sync">동기화 대기</span></p>
+    </div>
+    <button id="reset-open" class="text-button" type="button">진행 초기화</button>
+    <a class="text-button" href="/admin/">관리자 홈</a>
+  </footer>
+
+  <dialog id="away-dialog" class="dialog">
+    <h2>자리를 비운 동안</h2>
+    <p>서버가 계속 운영되어 요청이 쌓였습니다.</p>
+    <div class="away-grid">
+      <div><span>경과</span><strong id="away-time">–</strong></div>
+      <div><span>획득 요청</span><strong id="away-requests">–</strong></div>
+      <div id="away-level-wrap"><span>레벨</span><strong id="away-level">–</strong></div>
+    </div>
+    <form method="dialog"><button class="button primary" type="submit">확인</button></form>
+  </dialog>
+
+  <dialog id="help-dialog" class="dialog">
+    <img class="help-art" src="assets/hyangdani-hero.jpg" width="1200" height="800" loading="lazy" decoding="async" alt="향단이가 서버실을 뛰어다니며 레벨업하고 버그를 잡는 모습">
+    <h2>운영 안내</h2>
+    <ul class="help-list">
+      <li>요청은 서버에서 실시간으로 쌓입니다. 앱을 닫아도 진행이 멈추지 않습니다.</li>
+      <li>서버와 업그레이드를 사면 초당 처리량(RPS)이 올라갑니다. 발열이 냉각 용량을 넘으면 효율이 떨어집니다.</li>
+      <li>운영 레벨은 누적 요청으로 오르며, 레벨당 전체 RPS가 1% 증가합니다.</li>
+      <li>Reboot는 이번 런을 초기화하고 가동 토큰을 남깁니다. 토큰 1개당 전체 RPS +2%입니다.</li>
+      <li>모든 계산·저장은 서버에서 이루어지며, 진행도는 관리자 계정에 귀속됩니다.</li>
+    </ul>
+    <form method="dialog"><button class="button" type="submit">닫기</button></form>
+  </dialog>
+
+  <dialog id="reboot-dialog" class="dialog">
+    <h2>Reboot할까요?</h2>
+    <p>보유 요청, 서버, 업그레이드가 초기화됩니다. 토큰 <strong id="reboot-gain">0</strong>개를 얻고, 업적과 운영 레벨은 유지됩니다.</p>
+    <div class="dialog-actions">
+      <button id="reboot-cancel" class="button" type="button">취소</button>
+      <button id="reboot-confirm" class="button danger" type="button">Reboot</button>
+    </div>
+  </dialog>
+
+  <dialog id="reset-dialog" class="dialog">
+    <h2>진행을 완전히 초기화할까요?</h2>
+    <p>서버에 저장된 요청, 서버, 업그레이드, 토큰, 업적, 레벨이 모두 삭제됩니다. 되돌릴 수 없습니다.</p>
+    <div class="dialog-actions">
+      <button id="reset-cancel" class="button" type="button">취소</button>
+      <button id="reset-confirm" class="button danger" type="button">모두 삭제</button>
+    </div>
+  </dialog>
+
+  <div id="toast-region" class="toast-region" role="status" aria-live="polite"></div>
+
+  <noscript><p class="shell">이 게임은 JavaScript가 필요합니다.</p></noscript>
+</body>
+</html>

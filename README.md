@@ -1,18 +1,79 @@
-# QDPilot0001
+# QDPilot0001 — Idle Ops
 
-빈 프로젝트 스캐폴드입니다. 목적과 기술 스택은 추후 결정합니다.
+![향단이가 서버실을 뛰어다니며 레벨업하고 버그를 잡는 일러스트](static/assets/hyangdani-hero.jpg)
+
+HD2Lab Server-HQ의 **관리자 전용 방치형 게임**입니다. 서버실을 운영해 요청 처리량을 키우고, 레벨·업적·가동 토큰·Reboot로 성장합니다. 앱을 닫아 두어도 진행은 서버에서 이어집니다.
+
+## 핵심 설계
+
+- **서버 권위**: 클라이언트는 액션 의도(`type`, 티어, 수량, `opId`)만 보냅니다. 비용·보상·상태 전이는 전부 서버(`server/economy.py`)가 계산합니다.
+- **지연 시뮬레이션(lazy catch-up)**: 상시 tick 루프 없이, 요청이 올 때 `현재 시각 - 마지막 시뮬레이션 시각` 경과분을 한 번에 정산합니다(`requests += rps × elapsed`). 부재 기간 상한은 없고 100년 overflow 보호만 둡니다.
+- **멱등 액션**: `opId`(8~64자 `[A-Za-z0-9_-]`)가 30일간 유일 키로 기록되어 재시도·중복 요청이 상태를 두 번 바꾸지 않습니다.
+- **관리자 SSO 전용**: Nginx가 인증 후 `X-HD2Lab-User`만 Unix socket으로 전달합니다. 익명·공개 세션은 없습니다.
+
+## 성장 규칙 요약
+
+| 항목 | 규칙 |
+| --- | --- |
+| 생산량 | 서버 티어별 RPS 합 × 레벨 보너스(+1%/Lv) × 토큰 보너스(+2%/개) × 업그레이드 × 열 효율 |
+| 레벨 | `floor(sqrt(total_lifetime / 10000)) + 1` (누적 생산량 기준) |
+| 발열 | 서버·오버클럭 발열 합 vs 냉각 용량, 부족분만큼 효율 감소(최저 25%) |
+| Reboot | `floor(sqrt(run_lifetime / 1e6))` 가동 토큰 지급, 서버·업그레이드 초기화(토큰·레벨·업적 유지) |
+| 초기화 | 진행 전체 초기화, 토큰·레벨·업적은 유지 |
+
+전체 수치는 [`server/economy.py`](server/economy.py)의 티어·업그레이드·업적 정의가 정본입니다.
 
 ## 구조
 
 ```text
-QDPilot0001/
-├── README.md
-├── .gitignore
-├── .editorconfig
-└── docs/
-    └── notes.md
+server/economy.py   # 밸런스, 상태 정규화, 액션 검증, 레벨·발열·토큰 계산
+server/store.py     # SQLite(players, action_ops) 트랜잭션·멱등 처리 (WAL)
+server/api.py       # 표준 라이브러리 HTTP API + 정적 파일 서빙
+server/__main__.py  # UDS/TCP 실행 진입점 (--uds, --host/--port, --dev-user)
+static/             # Vanilla ES 모듈 UI (index.html, assets/)
+tests/              # 51개 단위·통합 테스트
 ```
 
-## 시작하기
+## 로컬 실행
 
-목적이 정해지면 이 섹션에 설치·실행 방법을 기록합니다.
+```bash
+python3 -m server --dev-user hd2service --static-root static --port 8123 --db /tmp/idle-ops.sqlite3
+# http://127.0.0.1:8123/admin/idle-ops/
+```
+
+`--dev-user`는 로컬 확인용 fallback이며, 운영에서는 사용하지 않습니다(Nginx가 `X-HD2Lab-User`를 주입).
+
+## API
+
+모든 경로 기준: `/admin/idle-ops/api/v1`
+
+| 메서드·경로 | 설명 |
+| --- | --- |
+| `GET /state` | 현재 상태·파생값·카탈로그·부재 보상 정보 |
+| `POST /actions` | `{"opId":"...","action":{"type":"buyServer","tier":"cache","qty":10}}` (qty: 1, 10, "max") |
+| 〃 | `{"opId":"...","action":{"type":"buyUpgrade","id":"network"}}` |
+| 〃 | `{"opId":"...","action":{"type":"reboot"}}` |
+| `POST /reset` | `{"opId":"..."}` — 진행 초기화(토큰·레벨·업적 유지) |
+| `GET /health/ready` | `{"status":"ok","service":"idle-ops"}` (인증 없음, 준비 상태만) |
+
+오류: 인증 없음 `401`, 잘못된 액션/opId/JSON `400`, 자금 부족 `400`, 본문 초과 `413`, 저장 실패 `500`.
+
+## 테스트
+
+```bash
+python3 -m unittest discover -s tests -t . -v
+```
+
+## 배포 (요약)
+
+운영 배치는 Server-HQ의 `docs/IDLE_OPS_OPERATIONS.md` 절차를 따릅니다. 요점:
+
+- 정본 경로 `/admin/idle-ops/`, Nginx는 `admin-sso-page.conf`/`admin-sso-api.conf`로 보호하고 게임 백엔드는 `/run/hd2lab-idle-ops/api.sock`에만 바인딩합니다.
+- systemd `hd2lab-idle-ops.service`(전용 사용자, `StateDirectory=/var/lib/hd2lab-idle-ops`)로 실행합니다.
+- admin-auth에 서비스 endpoint를 등록해야 `/auth/verify` prefix 허용 목록에 포함되어 403 없이 접근할 수 있습니다.
+
+## 데이터·백업
+
+- 운영 DB: `/var/lib/hd2lab-idle-ops/game.sqlite3` (SQLite WAL)
+- 백업: `sqlite3 game.sqlite3 ".backup '<사본 경로>'"` 또는 서비스 중지 후 파일 복사
+- 저장 내용: 관리자 `username`별 상태 JSON과 30일 TTL 액션 로그. 비밀·토큰·쿠키는 저장하지 않습니다.

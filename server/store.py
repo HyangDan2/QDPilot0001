@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover - Windows fallback keeps threads safe.
 from . import economy
 
 OP_TTL_SECONDS = 30 * 86400
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BACKUP_KEEP = 14
 BACKUP_KINDS = ("daily", "pre-deploy", "pre-hardreset", "pre-restore", "manual")
 MIN_FREE_BYTES = 256 * 1024 * 1024
@@ -134,6 +134,7 @@ class WorldResult:
     timestamps: dict | None = None
     cursor_reset: bool = False
     event_gap: bool = False
+    world_generation: int = 0
 
     @property
     def away_seconds(self):
@@ -233,7 +234,8 @@ class Store:
                 CREATE TABLE IF NOT EXISTS world (
                     id         INTEGER PRIMARY KEY CHECK (id = 1),
                     state_json TEXT NOT NULL,
-                    updated_at REAL NOT NULL
+                    updated_at REAL NOT NULL,
+                    generation INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS world_ops (
                     op_id       TEXT PRIMARY KEY,
@@ -263,7 +265,10 @@ class Store:
                     username       TEXT PRIMARY KEY,
                     last_seen      REAL NOT NULL,
                     last_reward_at REAL NOT NULL,
-                    checks         INTEGER NOT NULL DEFAULT 0
+                    checks         INTEGER NOT NULL DEFAULT 0,
+                    observed_requests REAL NOT NULL DEFAULT 0,
+                    observed_level INTEGER NOT NULL DEFAULT 1,
+                    world_generation INTEGER NOT NULL DEFAULT 0
                 ) WITHOUT ROWID;
                 CREATE TABLE IF NOT EXISTS audit_log (
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -279,6 +284,17 @@ class Store:
                 con.execute("ALTER TABLE world_ops ADD COLUMN action_json TEXT")
             if "result_json" not in columns:
                 con.execute("ALTER TABLE world_ops ADD COLUMN result_json TEXT")
+            world_columns = {row[1] for row in con.execute("PRAGMA table_info(world)")}
+            if "generation" not in world_columns:
+                con.execute("ALTER TABLE world ADD COLUMN generation INTEGER NOT NULL DEFAULT 0")
+            seen_columns = {row[1] for row in con.execute("PRAGMA table_info(admin_seen)")}
+            for name, ddl in (
+                ("observed_requests", "REAL NOT NULL DEFAULT 0"),
+                ("observed_level", "INTEGER NOT NULL DEFAULT 1"),
+                ("world_generation", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in seen_columns:
+                    con.execute(f"ALTER TABLE admin_seen ADD COLUMN {name} {ddl}")
             con.execute("DELETE FROM action_ops WHERE created_at < ?", (self._now() - OP_TTL_SECONDS,))
             con.execute("DELETE FROM world_ops WHERE created_at < ?", (self._now() - OP_TTL_SECONDS,))
             if stored < SCHEMA_VERSION:
@@ -552,12 +568,14 @@ class Store:
                         message = recorded.get("message")
                         details = recorded.get("details")
 
-            row = con.execute("SELECT state_json FROM world WHERE id = 1").fetchone()
+            row = con.execute("SELECT state_json, generation FROM world WHERE id = 1").fetchone()
             if row is None:
                 state = economy.initial_state(now)
                 state["last_sim_at"] = float(now)
+                generation = 0
             else:
                 state = economy.normalize_state(json.loads(row["state_json"]))
+                generation = int(row["generation"] or 0)
 
             created = []
             gains = economy.advance(state, now)
@@ -574,7 +592,8 @@ class Store:
             timestamps = None
             if actor:
                 seen = con.execute(
-                    "SELECT last_seen, last_reward_at FROM admin_seen WHERE username = ?",
+                    "SELECT last_seen, last_reward_at, observed_requests, observed_level, "
+                    "world_generation FROM admin_seen WHERE username = ?",
                     (actor,),
                 ).fetchone()
                 previous_seen = seen["last_seen"] if seen else now
@@ -583,21 +602,24 @@ class Store:
                 # checkpoints jump back in time or produce a negative absence.
                 away = max(0.0, now - previous_reward) if seen else 0.0
                 settled_at = max(now, state["last_sim_at"])
+                # Checkpoints are display-only observations. Absence is measured
+                # as time (awaySeconds); it is never converted into a production
+                # diff or extra currency. The console can compare the revision
+                # and generation of the last observation with the live world.
                 timestamps = {
                     "worldSettledAt": settled_at,
                     "adminLastSeen": previous_seen,
                     "adminLastCheck": max(previous_seen, now),
                     "lastRewardAt": previous_reward,
                     "awaySeconds": away,
+                    "observedRequests": float(seen["observed_requests"]) if seen else None,
+                    "observedLevel": int(seen["observed_level"]) if seen else None,
+                    "observedGeneration": int(seen["world_generation"]) if seen else None,
+                    "worldGeneration": generation,
+                    "observedFromEarlierWorld": bool(
+                        seen and int(seen["world_generation"]) != generation
+                    ),
                 }
-                con.execute(
-                    "INSERT INTO admin_seen (username, last_seen, last_reward_at, checks) "
-                    "VALUES (?, ?, ?, 1) ON CONFLICT(username) DO UPDATE SET "
-                    "last_seen = MAX(admin_seen.last_seen, excluded.last_seen), "
-                    "last_reward_at = MAX(admin_seen.last_reward_at, excluded.last_reward_at), "
-                    "checks = admin_seen.checks + 1",
-                    (actor, now, now),
-                )
 
             if action is not None and not duplicate:
                 before = None
@@ -613,6 +635,7 @@ class Store:
                 details = economy.apply_action(state, action, now)
                 if details["type"] == "hardReset":
                     details["backup"] = action.get("backup")
+                    generation += 1
                 message = details.get("message")
                 payload = {
                     k: v for k, v in details.items()
@@ -645,11 +668,36 @@ class Store:
                         ), op_id),
                     )
 
+            if actor:
+                # Record what this admin has now observed. Checkpoints stay
+                # separate per admin and never pay out; monotonic MAX guards
+                # against a corrected (backwards) clock.
+                con.execute(
+                    "INSERT INTO admin_seen (username, last_seen, last_reward_at, checks, "
+                    "observed_requests, observed_level, world_generation) "
+                    "VALUES (?, ?, ?, 1, ?, ?, ?) ON CONFLICT(username) DO UPDATE SET "
+                    "last_seen = MAX(admin_seen.last_seen, excluded.last_seen), "
+                    "last_reward_at = MAX(admin_seen.last_reward_at, excluded.last_reward_at), "
+                    "checks = admin_seen.checks + 1, "
+                    "observed_requests = excluded.observed_requests, "
+                    "observed_level = excluded.observed_level, "
+                    "world_generation = excluded.world_generation",
+                    (
+                        actor, now, now,
+                        float(state["requests"]), int(economy.derived(state)["level"]),
+                        generation,
+                    ),
+                )
+
             state["last_seen"] = float(now)
             con.execute(
-                "INSERT INTO world (id, state_json, updated_at) VALUES (1, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, updated_at = excluded.updated_at",
-                (json.dumps(state, ensure_ascii=False, separators=(",", ":"), allow_nan=False), float(now)),
+                "INSERT INTO world (id, state_json, updated_at, generation) VALUES (1, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, "
+                "updated_at = excluded.updated_at, generation = excluded.generation",
+                (
+                    json.dumps(state, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
+                    float(now), int(generation),
+                ),
             )
             if created:
                 con.execute(
@@ -676,6 +724,7 @@ class Store:
                 timestamps=timestamps,
                 cursor_reset=cursor_reset,
                 event_gap=gap,
+                world_generation=generation,
             )
         except Exception:
             con.execute("ROLLBACK")

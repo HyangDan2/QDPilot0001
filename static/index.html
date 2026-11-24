@@ -98,6 +98,25 @@
       </article>
     </section>
 
+    <section class="panel checkpoint-panel" aria-labelledby="checkpoint-title">
+      <div class="panel-head">
+        <div>
+          <p class="kicker">MY CHECKPOINT</p>
+          <h2 id="checkpoint-title">내 관측 기록</h2>
+        </div>
+        <p class="panel-note">표시 전용 · 보상 없음</p>
+      </div>
+      <dl class="checkpoint-grid">
+        <div><dt>마지막 확인</dt><dd id="cp-last-check">–</dd></div>
+        <div><dt>보상 기준 시각</dt><dd id="cp-last-reward">–</dd></div>
+        <div><dt>관측 생산량</dt><dd id="cp-observed-requests">–</dd></div>
+        <div><dt>관측 레벨</dt><dd id="cp-observed-level">–</dd></div>
+        <div><dt>관측 세계 세대</dt><dd id="cp-observed-generation">–</dd></div>
+        <div><dt>현재 세계 세대</dt><dd id="cp-world-generation">–</dd></div>
+      </dl>
+      <p id="cp-stale" class="panel-note" hidden>마지막 관측은 이전 세계의 기록입니다. 현재 세계는 새로 시작되었습니다.</p>
+    </section>
+
     <div class="game-grid">
       <section class="panel rack-panel" aria-labelledby="rack-title">
         <div class="panel-head">

@@ -35,6 +35,13 @@ const els = {
   statCooling: byId("stat-cooling"),
   statTokens: byId("stat-tokens"),
   statReboots: byId("stat-reboots"),
+  cpLastCheck: byId("cp-last-check"),
+  cpLastReward: byId("cp-last-reward"),
+  cpObservedRequests: byId("cp-observed-requests"),
+  cpObservedLevel: byId("cp-observed-level"),
+  cpObservedGeneration: byId("cp-observed-generation"),
+  cpWorldGeneration: byId("cp-world-generation"),
+  cpStale: byId("cp-stale"),
   rackGrid: byId("rack-grid"),
   rackEmpty: byId("rack-empty"),
   rackSummary: byId("rack-summary"),
@@ -177,6 +184,21 @@ function clockNow() {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function fmtStamp(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "–";
+  return new Date(seconds * 1000).toLocaleString("ko-KR", {
+    month: "2-digit",
+    day: "2-digit",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function fmtGeneration(value) {
+  return Number.isFinite(value) ? `${value + 1}세대` : "–";
 }
 
 function makeOpId() {
@@ -563,6 +585,21 @@ function render() {
   updateAffordability();
 }
 
+function renderCheckpoint(stamps) {
+  if (!stamps) return;
+  els.cpLastCheck.textContent = fmtStamp(stamps.adminLastCheck);
+  els.cpLastReward.textContent = fmtStamp(stamps.lastRewardAt);
+  els.cpObservedRequests.textContent = Number.isFinite(stamps.observedRequests)
+    ? fmtInt(stamps.observedRequests)
+    : "–";
+  els.cpObservedLevel.textContent = Number.isFinite(stamps.observedLevel)
+    ? `Lv.${stamps.observedLevel}`
+    : "–";
+  els.cpObservedGeneration.textContent = fmtGeneration(stamps.observedGeneration);
+  els.cpWorldGeneration.textContent = fmtGeneration(stamps.worldGeneration);
+  els.cpStale.hidden = !stamps.observedFromEarlierWorld;
+}
+
 function updateLiveNumbers() {
   if (!game.payload || document.hidden) return;
   const lifetime = currentLifetime();
@@ -628,6 +665,7 @@ function accept(data) {
 
   const awayVisible = showAway(data);
   announceGains(data, { awayVisible });
+  renderCheckpoint(data.timestamps);
 
   if (data.message && !data.duplicate) {
     addLog(data.message);

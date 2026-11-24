@@ -176,6 +176,10 @@ class ApiTests(unittest.TestCase):
         status, _, body = self.call("GET", ADMIN + "/api/v1/health/ready", user=None)
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ok")
+        storage = body["storage"]
+        self.assertTrue(storage["ok"])
+        self.assertEqual(storage["schemaVersion"], storage["expectedSchemaVersion"])
+        self.assertGreater(storage["dbBytes"], 0)
 
     def test_public_state_needs_no_identity_and_is_sanitised(self):
         status, headers, body = self.call("GET", WORLD + "/api/v1/state", user=None)

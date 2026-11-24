@@ -161,7 +161,7 @@ class Handler(BaseHTTPRequestHandler):
             self._redirect(PUBLIC_BASE + "/")
             return
         if path == ADMIN_API + "/health/ready":
-            self._json(200, {"status": "ok", "service": "idle-ops"})
+            self._handle_ready()
             return
         if path == ADMIN_API + "/state":
             self._handle_state(public=False)
@@ -216,6 +216,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Location", location)
         self.send_header("Content-Length", "0")
         self.end_headers()
+
+    def _handle_ready(self):
+        storage = self.store.readiness()
+        ready = bool(storage.get("ok"))
+        self._json(
+            200 if ready else 503,
+            {"status": "ok" if ready else "degraded", "service": "idle-ops", "storage": storage},
+        )
 
     def _handle_state(self, public=False):
         user = "" if public else self._username()

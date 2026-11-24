@@ -1,5 +1,7 @@
 """SQLite store behaviour: shared world, migration, events, idempotency."""
 
+import contextlib
+import io
 import json
 import os
 import sqlite3
@@ -9,7 +11,16 @@ import time
 import unittest
 
 from server import economy
-from server.store import EVENT_LIMIT, EVENT_RETENTION, OpConflict, SnapshotCache, Store
+from server.store import (
+    BACKUP_KEEP,
+    EVENT_LIMIT,
+    EVENT_RETENTION,
+    SCHEMA_VERSION,
+    OpConflict,
+    SchemaTooNew,
+    SnapshotCache,
+    Store,
+)
 
 NOW = 1_700_000_000.0
 OP = "op_aaaaaaaa"
@@ -171,6 +182,56 @@ class StoreTests(unittest.TestCase):
         with sqlite3.connect(self.path) as con:
             count = int(con.execute("SELECT COUNT(*) FROM world_events").fetchone()[0])
         self.assertLessEqual(count, EVENT_RETENTION)
+
+    def test_schema_version_is_recorded_and_newer_schemas_are_refused(self):
+        store = self.open()
+        with sqlite3.connect(self.path) as con:
+            version = int(con.execute("PRAGMA user_version").fetchone()[0])
+        self.assertEqual(version, SCHEMA_VERSION)
+        with sqlite3.connect(self.path) as con:
+            con.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
+        with self.assertRaises(SchemaTooNew):
+            Store(self.path)
+
+    def test_daily_backups_are_verified_and_pruned(self):
+        store = self.open()
+        store.world(NOW)
+        for _ in range(BACKUP_KEEP + 3):
+            store.backup("daily", now=NOW, keep=BACKUP_KEEP)
+        names = sorted(
+            name for name in os.listdir(store.backup_dir)
+            if name.startswith("idle-ops-daily-") and name.endswith(".sqlite3")
+        )
+        self.assertEqual(len(names), BACKUP_KEEP)
+        for name in names:
+            self.assertEqual(Store.check_sqlite(os.path.join(store.backup_dir, name)), "ok")
+
+    def test_restore_rolls_back_to_a_verified_snapshot(self):
+        from server.backup import restore
+
+        store = self.open()
+        store.world(NOW)
+        with sqlite3.connect(self.path) as con:
+            state = json.loads(con.execute("SELECT state_json FROM world WHERE id = 1").fetchone()[0])
+            state["requests"] = 10_000.0
+            con.execute("UPDATE world SET state_json = ? WHERE id = 1", (json.dumps(state),))
+        store.world(NOW + 1, action={"type": "buyServer", "tier": "cache", "qty": 1}, op_id=OP)
+        snapshot = store.backup("manual", now=NOW)
+        store.world(NOW + 2, action={"type": "buyServer", "tier": "cache", "qty": 1}, op_id=OP + "2")
+        self.assertEqual(store.world(NOW + 3).state["servers"], {"cache": 3})
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            restore(self.path, snapshot)
+        restored = Store(self.path).world(NOW + 4)
+        self.assertEqual(restored.state["servers"], {"cache": 2})
+
+    def test_readiness_reports_storage_health(self):
+        store = self.open()
+        report = store.readiness()
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["schemaVersion"], SCHEMA_VERSION)
+        self.assertGreater(report["dbBytes"], 0)
+        self.assertGreater(report["freeBytes"], 0)
 
     def test_action_is_idempotent_per_op_id(self):
         store = self.open()

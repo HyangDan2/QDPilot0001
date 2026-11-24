@@ -31,11 +31,13 @@ HD2Lab Server-HQ의 **공유 월드 방치형 게임**입니다. 서버실을 �
 ```text
 server/economy.py   # 밸런스, 상태 정규화, 액션 검증, 레벨·발열·토큰 계산
 server/store.py     # SQLite(world, world_ops, world_events + 레거시 players) 트랜잭션·멱등 처리 (WAL)
+server/backup.py    # 정합성 백업·검증·복구 CLI (python3 -m server.backup)
 server/api.py       # 표준 라이브러리 HTTP API + 관리자/공개 정적 파일 서빙
 server/__main__.py  # UDS/TCP 실행 진입점 (--uds, --host/--port, --static-root, --public-root, --dev-user)
 static/             # Vanilla ES 모듈 관리자 콘솔 (index.html, assets/)
 static/public/      # 공개 월드 뷰 (index.html, assets/engine.js, world.js, sprites/)
-tests/              # 61개 단위·통합 테스트 (UDS 포함)
+docs/               # DB_MIGRATION.md(백업·복구·스키마 버전), notes.md
+tests/              # 119개 단위·통합 테스트 (UDS 포함)
 ```
 
 ## 로컬 실행
@@ -62,7 +64,7 @@ python3 -m server --dev-user hd2service --static-root static --public-root stati
 | 〃 | `{"opId":"...","action":{"type":"buyUpgrade","id":"network"}}` |
 | 〃 | `{"opId":"...","action":{"type":"reboot"}}` |
 | `POST /reset` | `{"opId":"..."}` — 월드 초기화(토큰·레벨·업적 유지) |
-| `GET /health/ready` | `{"status":"ok","service":"idle-ops"}` (인증 없음, 준비 상태만) |
+| `GET /health/ready` | `{"status":"ok","service":"idle-ops","storage":{...}}` — 저장소·스키마·여유 공간 반영, 실패 시 503 (인증 없음) |
 
 공개 경로 기준: `/idle-ops/api/v1`
 
@@ -77,7 +79,7 @@ python3 -m server --dev-user hd2service --static-root static --public-root stati
 ## 테스트
 
 ```bash
-python3 -m unittest discover -s tests -t . -v   # 61 tests (실제 UDS 4건 포함)
+python3 -m unittest discover -s tests -t . -v   # 119 tests (실제 UDS 4건 포함)
 ```
 
 ## 배포 (요약)
@@ -90,6 +92,9 @@ python3 -m unittest discover -s tests -t . -v   # 61 tests (실제 UDS 4건 포�
 
 ## 데이터·백업
 
-- 운영 DB: `/var/lib/hd2lab-idle-ops/game.sqlite3` (SQLite WAL)
-- 백업: `sqlite3 game.sqlite3 ".backup '<사본 경로>'"` 또는 서비스 중지 후 파일 복사
+- 운영 DB: `/var/lib/hd2lab-idle-ops/game.sqlite3` (SQLite WAL, 스키마 `PRAGMA user_version`)
+- 백업: `python3 -m server.backup create --db <db> --kind daily|pre-deploy` — 온라인 백업 API + `quick_check` 검증, 일일 보존 14개
+- 복구: 서비스 중지 후 `python3 -m server.backup restore --db <db> --file <backup>` (자동 pre-restore 백업·검증)
+- 준비 상태: `GET /admin/idle-ops/api/v1/health/ready`가 저장소·스키마·여유 공간을 반영(실패 503)
 - 저장 내용: 관리자 `username`별 상태 JSON과 30일 TTL 액션 로그. 비밀·토큰·쿠키는 저장하지 않습니다.
+- 상세 절차: [`docs/DB_MIGRATION.md`](docs/DB_MIGRATION.md)

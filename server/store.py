@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import threading
 import time
@@ -22,6 +23,14 @@ from urllib.parse import quote
 from . import economy
 
 OP_TTL_SECONDS = 30 * 86400
+SCHEMA_VERSION = 2
+BACKUP_KEEP = 14
+BACKUP_KINDS = ("daily", "pre-deploy", "pre-hardreset", "pre-restore", "manual")
+MIN_FREE_BYTES = 256 * 1024 * 1024
+
+
+class SchemaTooNew(RuntimeError):
+    """The database was written by a newer release; refuse to touch it."""
 
 
 class OpConflict(Exception):
@@ -140,6 +149,11 @@ class Store:
         # invalidate their cache immediately after an admin action.
         self.generation = 0
         with self._connect() as con:
+            stored = int(con.execute("PRAGMA user_version").fetchone()[0])
+            if stored > SCHEMA_VERSION:
+                raise SchemaTooNew(
+                    f"database schema v{stored} is newer than this release (v{SCHEMA_VERSION})"
+                )
             con.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS world (
@@ -193,6 +207,8 @@ class Store:
                 con.execute("ALTER TABLE world_ops ADD COLUMN result_json TEXT")
             con.execute("DELETE FROM action_ops WHERE created_at < ?", (self._now() - OP_TTL_SECONDS,))
             con.execute("DELETE FROM world_ops WHERE created_at < ?", (self._now() - OP_TTL_SECONDS,))
+            if stored < SCHEMA_VERSION:
+                con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             self._seed_world(con, self._now())
 
     @staticmethod
@@ -245,38 +261,109 @@ class Store:
         finally:
             con.close()
 
-    def _backup(self, now):
+    def _backup_path(self, kind, now):
         os.makedirs(self.backup_dir, exist_ok=True)
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(now))
-        base = os.path.join(self.backup_dir, f"idle-ops-pre-hardreset-{stamp}")
+        base = os.path.join(self.backup_dir, f"idle-ops-{kind}-{stamp}")
         target = base + ".sqlite3"
         suffix = 2
         while os.path.exists(target):
             target = f"{base}-{suffix}.sqlite3"
             suffix += 1
+        return target
+
+    @staticmethod
+    def check_sqlite(path):
+        """Return the result of PRAGMA quick_check for one database file."""
+        con = sqlite3.connect(f"file:{quote(os.path.abspath(path))}?mode=ro", uri=True, timeout=5.0)
+        try:
+            return str(con.execute("PRAGMA quick_check").fetchone()[0])
+        finally:
+            con.close()
+
+    def backup(self, kind="manual", now=None, keep=BACKUP_KEEP):
+        """Write a consistent snapshot with SQLite's online backup API.
+
+        The copy is verified before it is reported, so a failed backup never
+        silently replaces a good one. ``keep`` prunes older archives of the
+        same kind (daily retention); hard-reset/pre-restore snapshots pass 0.
+        """
+        if kind not in BACKUP_KINDS:
+            raise ValueError(f"unknown backup kind: {kind}")
+        target = self._backup_path(kind, self._now() if now is None else float(now))
         source = self._connect()
         try:
             dest = sqlite3.connect(target)
             try:
                 source.backup(dest)
+                # The live DB is WAL; the archive must be a self-contained file.
+                dest.execute("PRAGMA journal_mode=DELETE")
             finally:
                 dest.close()
         finally:
             source.close()
-        check = sqlite3.connect(target)
-        try:
-            status = check.execute("PRAGMA quick_check").fetchone()[0]
-        finally:
-            check.close()
+        status = self.check_sqlite(target)
         if status != "ok":
+            os.remove(target)
             raise sqlite3.DatabaseError(f"backup verification failed: {status}")
+        if keep:
+            self.prune(keep=keep, kind=kind)
         return target
+
+    def prune(self, keep=BACKUP_KEEP, kind="daily"):
+        """Delete the oldest ``idle-ops-<kind>-*`` archives beyond ``keep``."""
+        os.makedirs(self.backup_dir, exist_ok=True)
+        prefix = f"idle-ops-{kind}-"
+        names = sorted(
+            name for name in os.listdir(self.backup_dir)
+            if name.startswith(prefix) and name.endswith(".sqlite3")
+        )
+        removed = []
+        for name in names[:-keep] if keep > 0 else []:
+            path = os.path.join(self.backup_dir, name)
+            os.remove(path)
+            for suffix in ("-wal", "-shm"):
+                side = path + suffix
+                if os.path.exists(side):
+                    os.remove(side)
+            removed.append(path)
+        return removed
+
+    def integrity(self):
+        con = self._connect()
+        try:
+            return str(con.execute("PRAGMA quick_check").fetchone()[0])
+        finally:
+            con.close()
+
+    def readiness(self):
+        try:
+            con = self._connect()
+            try:
+                version = int(con.execute("PRAGMA user_version").fetchone()[0])
+                con.execute("SELECT 1 FROM world WHERE id = 1").fetchone()
+            finally:
+                con.close()
+            usage = shutil.disk_usage(os.path.dirname(os.path.abspath(self.path)))
+            backups = 0
+            if os.path.isdir(self.backup_dir):
+                backups = sum(1 for name in os.listdir(self.backup_dir) if name.endswith(".sqlite3"))
+            return {
+                "ok": version <= SCHEMA_VERSION and usage.free >= MIN_FREE_BYTES,
+                "schemaVersion": version,
+                "expectedSchemaVersion": SCHEMA_VERSION,
+                "dbBytes": os.path.getsize(self.path),
+                "freeBytes": usage.free,
+                "backupCount": backups,
+            }
+        except (sqlite3.Error, OSError):
+            return {"ok": False, "schemaVersion": None, "expectedSchemaVersion": SCHEMA_VERSION}
 
     def hard_reset(self, now=None, op_id=None, actor=""):
         """Back up the database, then zero the world. Fails closed on backup error."""
         if self._op_seen(op_id):
             return self.world(now, action={"type": "hardReset"}, op_id=op_id, actor=actor)
-        backup = self._backup(self._now() if now is None else now)
+        backup = self.backup("pre-hardreset", now=self._now() if now is None else now, keep=0)
         return self.world(
             now,
             action={"type": "hardReset", "backup": backup},

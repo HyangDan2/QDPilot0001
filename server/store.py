@@ -222,7 +222,7 @@ class Store:
         self.gate = _WriteGate(self.path + ".world.lock")
         self.service_lock_path = self.path + ".service.lock"
         self._service_lock = None
-        with self._connect() as con:
+        with contextlib.closing(self._connect()) as con:
             stored = int(con.execute("PRAGMA user_version").fetchone()[0])
             if stored > SCHEMA_VERSION:
                 raise SchemaTooNew(
@@ -365,21 +365,29 @@ class Store:
         if kind not in BACKUP_KINDS:
             raise ValueError(f"unknown backup kind: {kind}")
         target = self._backup_path(kind, self._now() if now is None else float(now))
+        staging = target + ".partial"
+        if os.path.exists(staging):
+            os.remove(staging)
         source = self._connect()
         try:
-            dest = sqlite3.connect(target)
+            dest = sqlite3.connect(staging)
             try:
                 source.backup(dest)
                 # The live DB is WAL; the archive must be a self-contained file.
                 dest.execute("PRAGMA journal_mode=DELETE")
             finally:
                 dest.close()
+        except BaseException:
+            if os.path.exists(staging):
+                os.remove(staging)
+            raise
         finally:
             source.close()
-        status = self.check_sqlite(target)
+        status = self.check_sqlite(staging)
         if status != "ok":
-            os.remove(target)
+            os.remove(staging)
             raise sqlite3.DatabaseError(f"backup verification failed: {status}")
+        os.replace(staging, target)
         if keep:
             self.prune(keep=keep, kind=kind)
         return target

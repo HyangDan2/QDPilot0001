@@ -1,0 +1,12 @@
+# Proposal: daily verified snapshot at 04:17 local time.
+[Unit]
+Description=Daily HD2Lab Idle Ops backup
+
+[Timer]
+OnCalendar=*-*-* 04:17:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=idle-ops-backup.service
+
+[Install]
+WantedBy=timers.target

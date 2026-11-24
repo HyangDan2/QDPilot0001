@@ -459,7 +459,11 @@ async function fetchState() {
     failures = 0;
     els.loading.hidden = true;
     els.error.hidden = true;
-    setSync("공유 월드 · 동기화됨");
+    if (payload.stale) {
+      setSync("마지막 정상 데이터 표시 중", "stale");
+    } else {
+      setSync("공유 월드 · 동기화됨");
+    }
     schedule(POLL_MS);
   } catch (error) {
     failures += 1;

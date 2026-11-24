@@ -530,14 +530,14 @@ class SnapshotCacheTests(unittest.TestCase):
     def test_single_flight_refresh(self):
         cache = SnapshotCache(self.store, ttl=5)
         calls = []
-        original = cache.read_state
+        original = cache.read_world
 
         def slow_read():
             calls.append(1)
             time.sleep(0.1)
             return original()
 
-        cache.read_state = slow_read
+        cache.read_world = slow_read
         barrier = threading.Barrier(8)
         results = []
 

@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover - Windows fallback keeps threads safe.
 from . import economy
 
 OP_TTL_SECONDS = 30 * 86400
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 BACKUP_KEEP = 14
 BACKUP_KINDS = ("daily", "pre-deploy", "pre-hardreset", "pre-restore", "manual")
 MIN_FREE_BYTES = 256 * 1024 * 1024
@@ -50,6 +50,10 @@ class OpConflict(Exception):
 
 class WorldBusy(TimeoutError):
     """Another process holds the world write gate past the caller's deadline."""
+
+
+class WorldUnavailable(RuntimeError):
+    """The world row cannot be read; never substitute a fresh world."""
 
 
 class _WriteGate:
@@ -135,6 +139,8 @@ class WorldResult:
     cursor_reset: bool = False
     event_gap: bool = False
     world_generation: int = 0
+    revision: int = 0
+    stale: bool = False
 
     @property
     def away_seconds(self):
@@ -160,7 +166,7 @@ def _event_payload(row):
     return payload
 
 
-def _read_events(con, since):
+def _read_events(con, since, until=None):
     """Return (events, cursor, cursor_reset, gap) for events after ``since``.
 
     ``cursor_reset`` is set when the cursor is past the newest stored id, which
@@ -168,31 +174,44 @@ def _read_events(con, since):
     when the cursor fell out of the retention window or when more events are
     pending than one response may carry; in that case only the newest window is
     returned so a long absence never replays a flood of old events.
+
+    ``until`` caps the read at the event id observed together with the state
+    snapshot, so a response never mixes a state revision with events appended
+    after it.
     """
-    bounds = con.execute("SELECT MIN(id), MAX(id) FROM world_events").fetchone()
+    ceiling = " AND id <= ?" if until is not None else ""
+    ceiling_args = (int(until),) if until is not None else ()
+    bounds = con.execute(
+        f"SELECT MIN(id), MAX(id) FROM world_events WHERE 1 = 1{ceiling}", ceiling_args
+    ).fetchone()
     low = int(bounds[0] or 0)
     high = int(bounds[1] or 0)
+    if since is None:
+        return [], high, False, False
     start = int(since)
     cursor_reset = start > high
     if cursor_reset:
         start = high
     gap = start < low - 1
     pending = int(
-        con.execute("SELECT COUNT(*) FROM world_events WHERE id > ?", (start,)).fetchone()[0]
+        con.execute(
+            f"SELECT COUNT(*) FROM world_events WHERE id > ?{ceiling}",
+            (start, *ceiling_args),
+        ).fetchone()[0]
     )
     if pending > EVENT_LIMIT:
         gap = True
         rows = con.execute(
             "SELECT id, created_at, kind, payload_json FROM world_events "
-            "WHERE id > ? ORDER BY id DESC LIMIT ?",
-            (start, EVENT_LIMIT),
+            f"WHERE id > ?{ceiling} ORDER BY id DESC LIMIT ?",
+            (start, *ceiling_args, EVENT_LIMIT),
         ).fetchall()
         rows.reverse()
     else:
         rows = con.execute(
             "SELECT id, created_at, kind, payload_json FROM world_events "
-            "WHERE id > ? ORDER BY id ASC LIMIT ?",
-            (start, EVENT_LIMIT),
+            f"WHERE id > ?{ceiling} ORDER BY id ASC LIMIT ?",
+            (start, *ceiling_args, EVENT_LIMIT),
         ).fetchall()
     chosen = []
     size = 0
@@ -235,7 +254,8 @@ class Store:
                     id         INTEGER PRIMARY KEY CHECK (id = 1),
                     state_json TEXT NOT NULL,
                     updated_at REAL NOT NULL,
-                    generation INTEGER NOT NULL DEFAULT 0
+                    generation INTEGER NOT NULL DEFAULT 0,
+                    revision   INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS world_ops (
                     op_id       TEXT PRIMARY KEY,
@@ -287,6 +307,8 @@ class Store:
             world_columns = {row[1] for row in con.execute("PRAGMA table_info(world)")}
             if "generation" not in world_columns:
                 con.execute("ALTER TABLE world ADD COLUMN generation INTEGER NOT NULL DEFAULT 0")
+            if "revision" not in world_columns:
+                con.execute("ALTER TABLE world ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
             seen_columns = {row[1] for row in con.execute("PRAGMA table_info(admin_seen)")}
             for name, ddl in (
                 ("observed_requests", "REAL NOT NULL DEFAULT 0"),
@@ -568,14 +590,18 @@ class Store:
                         message = recorded.get("message")
                         details = recorded.get("details")
 
-            row = con.execute("SELECT state_json, generation FROM world WHERE id = 1").fetchone()
+            row = con.execute(
+                "SELECT state_json, generation, revision FROM world WHERE id = 1"
+            ).fetchone()
             if row is None:
                 state = economy.initial_state(now)
                 state["last_sim_at"] = float(now)
                 generation = 0
+                revision = 0
             else:
                 state = economy.normalize_state(json.loads(row["state_json"]))
                 generation = int(row["generation"] or 0)
+                revision = int(row["revision"] or 0)
 
             created = []
             gains = economy.advance(state, now)
@@ -690,13 +716,15 @@ class Store:
                 )
 
             state["last_seen"] = float(now)
+            revision += 1
             con.execute(
-                "INSERT INTO world (id, state_json, updated_at, generation) VALUES (1, ?, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET state_json = excluded.state_json, "
-                "updated_at = excluded.updated_at, generation = excluded.generation",
+                "INSERT INTO world (id, state_json, updated_at, generation, revision) "
+                "VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                "state_json = excluded.state_json, updated_at = excluded.updated_at, "
+                "generation = excluded.generation, revision = excluded.revision",
                 (
                     json.dumps(state, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
-                    float(now), int(generation),
+                    float(now), int(generation), int(revision),
                 ),
             )
             if created:
@@ -725,6 +753,7 @@ class Store:
                 cursor_reset=cursor_reset,
                 event_gap=gap,
                 world_generation=generation,
+                revision=revision,
             )
         except Exception:
             con.execute("ROLLBACK")
@@ -753,60 +782,70 @@ class SnapshotCache:
 
     def _ro_connect(self):
         if not os.path.exists(self.store.path):
-            return None
+            raise WorldUnavailable("world database is not available")
         uri = "file:%s?mode=ro" % quote(os.path.abspath(self.store.path))
         try:
             return sqlite3.connect(uri, uri=True, timeout=5.0, isolation_level=None)
         except sqlite3.OperationalError:
             # Read-only WAL access can fail if the -shm file is unavailable;
-            # fall back to a normal connection that only ever runs SELECTs.
-            return self.store._connect()
+            # fall back to a normal connection that is forbidden to write.
+            con = sqlite3.connect(self.store.path, timeout=5.0, isolation_level=None)
+            con.execute("PRAGMA query_only = ON")
+            return con
 
-    def read_state(self):
+    def read_world(self):
+        """Read the state, generation and newest event id from one snapshot.
+
+        BEGIN (deferred) pins one WAL read snapshot, so the returned revision
+        and event ceiling always belong together.
+        """
+        con = self._ro_connect()
         try:
-            con = self._ro_connect()
-        except sqlite3.OperationalError:
-            return None
-        if con is None:
-            return None
-        try:
-            row = con.execute("SELECT state_json FROM world WHERE id = 1").fetchone()
-        except sqlite3.OperationalError:
-            return None
+            con.execute("BEGIN")
+            row = con.execute(
+                "SELECT state_json, generation, revision FROM world WHERE id = 1"
+            ).fetchone()
+            cursor_row = con.execute("SELECT MAX(id) FROM world_events").fetchone()
+            con.execute("COMMIT")
+        except sqlite3.Error as exc:
+            raise WorldUnavailable(f"world read failed: {exc}") from exc
         finally:
             con.close()
         if row is None:
-            return None
-        return economy.normalize_state(json.loads(row[0]))
+            raise WorldUnavailable("world row is missing")
+        return {
+            "state": economy.normalize_state(json.loads(row[0])),
+            "generation": int(row[1] or 0),
+            "revision": int(row[2] or 0),
+            "event_cursor": int(cursor_row[0] or 0),
+        }
 
-    def read_events(self, since):
+    def read_events(self, since, until=None):
         con = self._ro_connect()
-        if con is None:
-            return [], 0, False, False
         try:
-            if since is None:
-                row = con.execute("SELECT MAX(id) FROM world_events").fetchone()
-                return [], int(row[0] or 0), False, False
-            events, cursor, cursor_reset, gap = _read_events(con, since)
-        except sqlite3.OperationalError:
-            return [], 0, False, False
+            con.execute("BEGIN")
+            events, cursor, cursor_reset, gap = _read_events(con, since, until)
+            con.execute("COMMIT")
+            return events, cursor, cursor_reset, gap
+        except sqlite3.Error as exc:
+            raise WorldUnavailable(f"event read failed: {exc}") from exc
         finally:
             con.close()
-        return events, cursor, cursor_reset, gap
 
     def _refresh(self, now):
-        state = self.read_state()
-        if state is None:
-            state = economy.initial_state(now)
-            state["last_sim_at"] = float(now)
-        gains = economy.advance(state, now)
+        world = self.read_world()
+        gains = economy.advance(world["state"], now)
         return {
-            "state": state,
+            "state": world["state"],
             "gains": gains,
             "now": float(now),
+            "generation": world["generation"],
+            "revision": world["revision"],
+            "event_cursor": world["event_cursor"],
         }
 
     def latest(self, since=None):
+        stale = False
         with self._lock:
             now = time.time()
             fresh = (
@@ -815,11 +854,18 @@ class SnapshotCache:
                 and (time.monotonic() - self._at) < self.ttl
             )
             if not fresh:
-                self._base = self._refresh(now)
-                self._at = time.monotonic()
-                self._generation = self.store.generation
+                try:
+                    self._base = self._refresh(now)
+                    self._at = time.monotonic()
+                    self._generation = self.store.generation
+                except WorldUnavailable:
+                    # Never invent a fresh world from a failed read: either keep
+                    # serving the last good snapshot or surface the error.
+                    if self._base is None:
+                        raise
+                    stale = True
             base = self._base
-        events, cursor, cursor_reset, gap = self.read_events(since)
+        events, cursor, cursor_reset, gap = self.read_events(since, base["event_cursor"])
         return WorldResult(
             state=base["state"],
             gains=base["gains"],
@@ -828,4 +874,7 @@ class SnapshotCache:
             now=base["now"],
             cursor_reset=cursor_reset,
             event_gap=gap,
+            world_generation=base["generation"],
+            revision=base["revision"],
+            stale=stale,
         )

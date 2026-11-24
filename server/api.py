@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import content, economy
-from .store import OpConflict, SnapshotCache, WorldBusy
+from .store import OpConflict, SnapshotCache, WorldBusy, WorldUnavailable
 
 ADMIN_BASE = "/admin/idle-ops"
 ADMIN_API = ADMIN_BASE + "/api/v1"
@@ -82,6 +82,8 @@ def build_payload(result, now):
         "cursorReset": bool(result.cursor_reset),
         "eventGap": bool(result.event_gap),
         "worldGeneration": result.world_generation,
+        "worldRevision": result.revision,
+        "stale": bool(result.stale),
         **({"timestamps": result.timestamps} if result.timestamps else {}),
     }
 
@@ -261,6 +263,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             result = self.store.world(actor=user, since=self._since(self.path))
+        except WorldBusy as exc:
+            self.close_connection = True
+            self._json(503, {"detail": str(exc)})
+            return
         except (ValueError, sqlite3.Error) as exc:
             self._error(exc)
             return
@@ -269,6 +275,11 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_public_state(self):
         try:
             result = self.snapshot.latest(self._since(self.path))
+        except WorldUnavailable as exc:
+            self.log_message("public read unavailable: %s", exc)
+            self.close_connection = True
+            self._json(503, {"detail": "world is temporarily unavailable"})
+            return
         except (ValueError, sqlite3.Error, OSError) as exc:
             self._error(exc)
             return

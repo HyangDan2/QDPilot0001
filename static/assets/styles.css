@@ -80,7 +80,7 @@ body {
   overflow-wrap: anywhere;
 }
 
-body.hq-admin-page {
+html body.hq-admin-page {
   background:
     radial-gradient(1200px 520px at 85% -10%, var(--bg-glow) 0%, transparent 60%),
     var(--bg);

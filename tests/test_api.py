@@ -166,6 +166,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
         self.assertIn(b"assets/app.js", body)
         self.assertIn(b"Idle Ops", body)
+        self.assertIn(b'class="hq-admin-page"', body)
 
         status, headers, body = self.call("GET", "/admin/idle-ops/assets/styles.css")
         self.assertEqual(status, 200)

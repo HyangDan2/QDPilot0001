@@ -15,6 +15,11 @@ REBOOT_THRESHOLD = 1_000_000.0
 # Safety guard against float overflow only. There is no balance cap: absence is
 # simulated for the full elapsed time up to this bound (100 years).
 MAX_SIM_SECONDS = 100 * 365 * 86400.0
+# Backwards clock skew up to this bound is just held, without regressing
+# last_sim_at or granting time. Larger jumps are treated as clock corrections.
+CLOCK_REWIND_TOLERANCE = 300.0
+# A stored timestamp further ahead than this is considered a corrupt clock.
+MAX_FUTURE_SKEW = 24 * 3600.0
 MAX_BUY = 1000
 
 TIERS = [
@@ -311,8 +316,34 @@ def advance(state, now):
     The interval is settled in segments bounded by level/achievement thresholds,
     so the result depends on the starting state and elapsed time, not on how many
     times the world was polled in between.
+
+    Clock policy:
+      * small backwards skew keeps ``last_sim_at`` and grants nothing;
+      * a large backwards jump (NTP correction of a future clock) is resynced,
+        which never re-grants already settled time;
+      * forward jumps above the guard are settled for the guard window only.
     """
-    raw_elapsed = float(now) - state["last_sim_at"]
+    last_sim = state["last_sim_at"]
+    raw_elapsed = float(now) - last_sim
+    clock = "ok"
+    resync = False
+    if raw_elapsed < -CLOCK_REWIND_TOLERANCE:
+        drift = last_sim - float(now)
+        if drift > MAX_FUTURE_SKEW:
+            # The stored timestamp is implausibly far ahead (wrong clock).
+            # Resync to the current clock so the world is not frozen forever.
+            resync = True
+            clock = "resync"
+        else:
+            # Plausible future timestamp: wait for the clock to catch up rather
+            # than granting the same window twice.
+            clock = "rewind"
+        raw_elapsed = 0.0
+    elif raw_elapsed < 0.0:
+        clock = "rewind"
+        raw_elapsed = 0.0
+    elif raw_elapsed > MAX_SIM_SECONDS:
+        clock = "clamped"
     elapsed = max(0.0, min(raw_elapsed, MAX_SIM_SECONDS))
     level_before = level_for(state["total_lifetime"])
     gained = []
@@ -369,7 +400,10 @@ def advance(state, now):
             state["run_lifetime"] += chunk
             state["total_lifetime"] += chunk
             remaining = 0.0
-    state["last_sim_at"] = float(now)
+    if resync:
+        state["last_sim_at"] = float(now)
+    elif raw_elapsed > 0.0:
+        state["last_sim_at"] = float(now)
     unlock()
     return {
         "seconds": elapsed,
@@ -378,6 +412,7 @@ def advance(state, now):
         "level_to": level_for(state["total_lifetime"]),
         "achievements": gained,
         "segments": segments,
+        "clock": clock,
     }
 
 

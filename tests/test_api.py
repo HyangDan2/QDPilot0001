@@ -7,6 +7,7 @@ import socket
 import socketserver
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -76,6 +77,11 @@ class ApiTests(unittest.TestCase):
             return response.status, dict(response.getheaders()), parsed
         finally:
             connection.close()
+
+    def test_state_reports_server_time(self):
+        status, _, body = self.call("GET", ADMIN + "/api/v1/state")
+        self.assertEqual(status, 200)
+        self.assertLess(abs(body["serverTime"] - time.time()), 10)
 
     def test_health_is_available_without_identity(self):
         status, _, body = self.call("GET", ADMIN + "/api/v1/health/ready", user=None)

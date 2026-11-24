@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 import unittest
 
 from server import economy
@@ -179,6 +180,57 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(len(os.listdir(backup_dir)), 1)
         self.assertEqual(second.state["tokens"], 0)
         self.assertLess(second.state["total_lifetime"], 1.0)
+
+    def test_stale_read_does_not_regress_last_sim_at(self):
+        store = self.open()
+        store.world(NOW)
+        store.world(NOW + 100)
+        stale = store.world(NOW + 50)
+        self.assertEqual(stale.gains["seconds"], 0.0)
+        fresh = store.world(NOW + 100)
+        self.assertEqual(fresh.gains["seconds"], 0.0)
+
+    def test_clock_anomaly_never_double_grants(self):
+        store = self.open()
+        store.world(NOW)
+        spikes = store.world(NOW + economy.MAX_SIM_SECONDS * 2)
+        self.assertEqual(spikes.gains["clock"], "clamped")
+        settled = spikes.state["total_lifetime"]
+        corrected = store.world(NOW + 1)
+        self.assertEqual(corrected.gains["clock"], "resync")
+        self.assertEqual(corrected.state["total_lifetime"], settled)
+
+    def test_concurrent_worlds_settle_the_interval_once(self):
+        store = self.open()
+        seeded = store.world(NOW)
+        copy = json.loads(json.dumps(seeded.state))
+        economy.advance(copy, NOW + 100)
+        expected = copy["total_lifetime"]
+
+        results = []
+        barrier = threading.Barrier(8)
+
+        def worker():
+            barrier.wait()
+            results.append(store.world(NOW + 100))
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(results), 8)
+        for result in results:
+            self.assertAlmostEqual(result.state["total_lifetime"], expected, places=6)
+        self.assertEqual(store.world(NOW + 100).gains["seconds"], 0.0)
+
+    def test_world_reads_the_clock_inside_the_transaction(self):
+        store = self.open()
+        store.world(NOW)
+        result = store.world()
+        self.assertGreater(result.now, NOW)
+        self.assertGreaterEqual(result.state["last_sim_at"], NOW)
+        self.assertEqual(result.gains["seconds"], result.now - NOW)
 
     def test_corrupt_world_state_is_rejected(self):
         store = self.open()

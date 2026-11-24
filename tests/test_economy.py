@@ -1,5 +1,6 @@
 """Deterministic tests for the Idle Ops economy."""
 
+import math
 import unittest
 
 from server import economy
@@ -102,6 +103,60 @@ class ProgressionTests(unittest.TestCase):
         self.assertEqual(economy.prestige_tokens(8_999_999), 2)
 
 
+class ClockTests(unittest.TestCase):
+    def test_small_rewind_neither_grants_nor_regresses(self):
+        state = fresh(requests=100.0)
+        state["last_sim_at"] = NOW
+        info = economy.advance(state, NOW - 60)
+        self.assertEqual(info["clock"], "rewind")
+        self.assertEqual(info["seconds"], 0.0)
+        self.assertEqual(info["requests"], 0.0)
+        self.assertEqual(state["last_sim_at"], NOW)
+        self.assertEqual(state["requests"], 100.0)
+
+    def test_plausible_future_timestamp_is_held_until_caught_up(self):
+        state = fresh(requests=0.0)
+        state["last_sim_at"] = NOW + 7200
+        info = economy.advance(state, NOW)
+        self.assertEqual(info["clock"], "rewind")
+        self.assertEqual(info["seconds"], 0.0)
+        self.assertEqual(state["last_sim_at"], NOW + 7200)
+        later = economy.advance(state, NOW + 7300)
+        self.assertEqual(later["clock"], "ok")
+        self.assertAlmostEqual(later["seconds"], 100.0)
+        self.assertEqual(state["last_sim_at"], NOW + 7300)
+
+    def test_implausible_future_timestamp_resyncs(self):
+        state = fresh(requests=0.0)
+        state["last_sim_at"] = NOW + economy.MAX_FUTURE_SKEW + 7200
+        info = economy.advance(state, NOW)
+        self.assertEqual(info["clock"], "resync")
+        self.assertEqual(info["seconds"], 0.0)
+        self.assertEqual(state["last_sim_at"], NOW)
+        later = economy.advance(state, NOW + 10)
+        self.assertAlmostEqual(later["seconds"], 10.0)
+        self.assertEqual(state["last_sim_at"], NOW + 10)
+
+    def test_far_future_clock_is_clamped(self):
+        state = fresh(requests=0.0)
+        state["last_sim_at"] = NOW
+        info = economy.advance(state, NOW + economy.MAX_SIM_SECONDS * 2)
+        self.assertEqual(info["clock"], "clamped")
+        self.assertEqual(info["seconds"], economy.MAX_SIM_SECONDS)
+        self.assertEqual(state["last_sim_at"], NOW + economy.MAX_SIM_SECONDS * 2)
+        self.assertTrue(math.isfinite(state["total_lifetime"]))
+
+    def test_clock_correction_does_not_regrant_settled_time(self):
+        state = fresh(requests=0.0)
+        state["last_sim_at"] = NOW
+        economy.advance(state, NOW + economy.MAX_SIM_SECONDS * 2)
+        settled = state["total_lifetime"]
+        info = economy.advance(state, NOW + 5)
+        self.assertEqual(info["clock"], "resync")
+        self.assertEqual(info["seconds"], 0.0)
+        self.assertEqual(state["total_lifetime"], settled)
+
+
 class AdvanceTests(unittest.TestCase):
     def test_elapsed_time_earns_requests(self):
         state = fresh()
@@ -120,14 +175,16 @@ class AdvanceTests(unittest.TestCase):
         self.assertAlmostEqual(gains["seconds"], year)
         self.assertGreater(state["requests"], 10_000)
 
-    def test_backwards_clock_does_not_block_progress(self):
+    def test_backwards_clock_is_held_without_regressing(self):
         state = fresh()
         state["last_sim_at"] = NOW + 10_000
         gains = economy.advance(state, NOW)
         self.assertEqual(gains["requests"], 0)
-        self.assertEqual(state["last_sim_at"], NOW)
-        gains = economy.advance(state, NOW + 10)
+        self.assertEqual(gains["clock"], "rewind")
+        self.assertEqual(state["last_sim_at"], NOW + 10_000)
+        gains = economy.advance(state, NOW + 10_010)
         self.assertGreater(gains["requests"], 0)
+        self.assertEqual(state["last_sim_at"], NOW + 10_010)
 
     def test_advance_unlocks_achievements_and_levels(self):
         state = fresh(total_lifetime=800_000, servers={"cache": 10})

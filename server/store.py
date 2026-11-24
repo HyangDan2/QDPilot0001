@@ -40,6 +40,7 @@ class WorldResult:
     message: str | None = None
     details: dict | None = None
     duplicate: bool = False
+    now: float = 0.0
 
     @property
     def away_seconds(self):
@@ -191,11 +192,11 @@ class Store:
             raise sqlite3.DatabaseError(f"backup verification failed: {status}")
         return target
 
-    def hard_reset(self, now, op_id, actor=""):
+    def hard_reset(self, now=None, op_id=None, actor=""):
         """Back up the database, then zero the world. Fails closed on backup error."""
         if self._op_seen(op_id):
             return self.world(now, action={"type": "hardReset"}, op_id=op_id, actor=actor)
-        backup = self._backup(now)
+        backup = self._backup(self._now() if now is None else now)
         return self.world(
             now,
             action={"type": "hardReset", "backup": backup},
@@ -203,11 +204,16 @@ class Store:
             actor=actor,
         )
 
-    def world(self, now, action=None, op_id=None, actor="", since=None) -> WorldResult:
+    def world(self, now=None, action=None, op_id=None, actor="", since=None) -> WorldResult:
         actor = _clean_actor(actor)
         con = self._connect()
         try:
             con.execute("BEGIN IMMEDIATE")
+            if now is None:
+                # Read the clock only after the write lock is held, so a request
+                # that waited on another writer never simulates stale time.
+                now = self._now()
+            now = float(now)
             duplicate = False
             if op_id is not None:
                 cur = con.execute(
@@ -299,6 +305,7 @@ class Store:
                 message=message,
                 details=details,
                 duplicate=duplicate,
+                now=now,
             )
         except Exception:
             con.execute("ROLLBACK")

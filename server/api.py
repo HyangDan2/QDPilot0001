@@ -17,7 +17,6 @@ import os
 import re
 import sqlite3
 import sys
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -214,13 +213,12 @@ class Handler(BaseHTTPRequestHandler):
         if not public and not user:
             self._json(401, {"detail": "admin authentication required"})
             return
-        now = time.time()
         try:
-            result = self.store.world(now, actor=user, since=self._since(self.path))
+            result = self.store.world(actor=user, since=self._since(self.path))
         except (ValueError, sqlite3.Error) as exc:
             self._error(exc)
             return
-        self._json(200, build_payload(result, now))
+        self._json(200, build_payload(result, result.now))
 
     def _handle_action(self, reset=False):
         user = self._username()
@@ -250,16 +248,15 @@ class Handler(BaseHTTPRequestHandler):
         since = body.get("since")
         if not isinstance(since, int) or isinstance(since, bool) or since < 0:
             since = None
-        now = time.time()
         try:
-            result = self.store.world(now, action=action, op_id=op_id, actor=user, since=since)
+            result = self.store.world(action=action, op_id=op_id, actor=user, since=since)
         except ValueError as exc:
             self._json(400, {"detail": str(exc)})
             return
         except sqlite3.Error:
             self._error(RuntimeError("storage failure"))
             return
-        self._json(200, build_payload(result, now))
+        self._json(200, build_payload(result, result.now))
 
     def _handle_hard_reset(self):
         user = self._username()
@@ -285,13 +282,12 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(op_id, str) or not OP_ID.fullmatch(op_id):
             self._json(400, {"detail": "invalid opId"})
             return
-        now = time.time()
         try:
-            result = self.store.hard_reset(now, op_id, actor=user)
+            result = self.store.hard_reset(op_id=op_id, actor=user)
         except (OSError, sqlite3.Error) as exc:
             self._error(RuntimeError(f"hard reset failed: {exc}"))
             return
-        payload = build_payload(result, now)
+        payload = build_payload(result, result.now)
         payload["backup"] = (result.details or {}).get("backup")
         self._json(200, payload)
 

@@ -56,6 +56,16 @@ export class Animator {
 
   frameIndex() {
     const spec = STATES[this.state];
+    if (Array.isArray(spec.durations) && spec.durations.length === spec.frames) {
+      const total = spec.durations.reduce((sum, value) => sum + value, 0);
+      if (total <= 0) return 0;
+      let t = spec.loop ? this.elapsed % total : Math.min(this.elapsed, total);
+      for (let i = 0; i < spec.durations.length; i += 1) {
+        if (t < spec.durations[i]) return i;
+        t -= spec.durations[i];
+      }
+      return spec.frames - 1;
+    }
     if (spec.loop) return Math.floor((this.elapsed * spec.fps) % spec.frames);
     return Math.min(spec.frames - 1, Math.floor(this.elapsed * spec.fps));
   }

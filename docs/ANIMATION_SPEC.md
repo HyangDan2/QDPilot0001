@@ -56,6 +56,9 @@ reboot / reset    : 버그 제거, 이펙트 비움, idle로 복귀
 
 - `elapsed`를 누적하고 `frameIndex = floor(elapsed × fps) % frames`(루프) 또는
   `min(frames−1, floor(elapsed × fps))`(원샷)로 프레임을 고릅니다.
+- 상태에 `durations`(프레임별 초 배열, 길이 = `frames`)를 주면 프레임마다 다른 지속
+  시간을 쓸 수 있습니다. 루프는 `sum(durations)` 주기로 감고, 없으면 위 균등 FPS를
+  씁니다(현재 전 상태 균등).
 - 원샷은 `elapsed ≥ seconds`에서 완료됩니다.
 - `consumeHit()`는 공격 상태에서 히트 프레임에 도달했을 때 **정확히 한 번** true를
   돌려줍니다(단일 이미지 fallback은 0.16초 시점에 대체 처리).

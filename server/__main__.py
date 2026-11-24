@@ -42,6 +42,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     store = Store(args.db)
+    # ``server.backup restore`` refuses to replace the file while this lock is
+    # held, so an accidental online restore cannot race the running service.
+    service_lock = store.acquire_service_lock()
     handler = make_handler(
         store,
         dev_user=args.dev_user,
@@ -70,6 +73,7 @@ def main(argv=None):
         server.server_close()
         if args.uds and os.path.exists(args.uds):
             os.unlink(args.uds)
+        service_lock.close()
 
 
 if __name__ == "__main__":

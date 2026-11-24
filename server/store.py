@@ -11,6 +11,7 @@ the highest lifetime total, and then preserved untouched.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -20,6 +21,11 @@ import time
 from dataclasses import dataclass
 from urllib.parse import quote
 
+try:  # POSIX only; the service runs on macOS/Linux.
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback keeps threads safe.
+    fcntl = None
+
 from . import economy
 
 OP_TTL_SECONDS = 30 * 86400
@@ -27,6 +33,11 @@ SCHEMA_VERSION = 2
 BACKUP_KEEP = 14
 BACKUP_KINDS = ("daily", "pre-deploy", "pre-hardreset", "pre-restore", "manual")
 MIN_FREE_BYTES = 256 * 1024 * 1024
+# Normal world writes wait this long for a hard reset to finish before the API
+# reports a retryable 503. A hard reset takes its exclusive gate before the
+# backup starts and releases it only after the reset commits.
+WORLD_LOCK_TIMEOUT = 20.0
+HARD_RESET_LOCK_TIMEOUT = 60.0
 
 
 class SchemaTooNew(RuntimeError):
@@ -35,6 +46,66 @@ class SchemaTooNew(RuntimeError):
 
 class OpConflict(Exception):
     """Raised when one opId is reused for a different action."""
+
+
+class WorldBusy(TimeoutError):
+    """Another process holds the world write gate past the caller's deadline."""
+
+
+class _WriteGate:
+    """Readers-writer gate around the SQLite world file.
+
+    Normal world writes hold a shared gate; a hard reset holds it exclusively
+    from before the pre-reset backup until after the reset commit. The lock is a
+    ``flock`` on ``<db>.world.lock`` taken on its own descriptor for every
+    acquisition, so it serialises threads of this process as well as other
+    processes using the same database.
+
+    The gate is deliberately taken *before* SQLite is touched and is released
+    after the transaction commits. Backup file work never runs while a write
+    transaction is open, so file I/O and SQLite cannot deadlock each other.
+    """
+
+    def __init__(self, path):
+        self.path = path
+
+    @contextlib.contextmanager
+    def shared(self, timeout=WORLD_LOCK_TIMEOUT):
+        with self._hold(False, timeout, WORLD_LOCK_TIMEOUT, "world write"):
+            yield
+
+    @contextlib.contextmanager
+    def exclusive(self, timeout=HARD_RESET_LOCK_TIMEOUT):
+        with self._hold(True, timeout, HARD_RESET_LOCK_TIMEOUT, "hard reset"):
+            yield
+
+    @contextlib.contextmanager
+    def _hold(self, exclusive, timeout, default, label):
+        if fcntl is None:  # pragma: no cover - non-POSIX fallback.
+            yield
+            return
+        mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+        wait = default if timeout is None else float(timeout)
+        deadline = time.monotonic() + max(0.0, wait)
+        handle = open(self.path, "a+b")
+        try:
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), mode | fcntl.LOCK_NB)
+                    break
+                except (BlockingIOError, OSError):
+                    if time.monotonic() >= deadline:
+                        raise WorldBusy(f"{label} in progress; retry shortly")
+                    time.sleep(0.01)
+            try:
+                yield
+            finally:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except OSError:  # pragma: no cover - closing releases it anyway.
+                    pass
+        finally:
+            handle.close()
 
 
 EVENT_RETENTION = 400
@@ -148,6 +219,9 @@ class Store:
         # Bumped on every committed world write; read-only snapshots use it to
         # invalidate their cache immediately after an admin action.
         self.generation = 0
+        self.gate = _WriteGate(self.path + ".world.lock")
+        self.service_lock_path = self.path + ".service.lock"
+        self._service_lock = None
         with self._connect() as con:
             stored = int(con.execute("PRAGMA user_version").fetchone()[0])
             if stored > SCHEMA_VERSION:
@@ -336,6 +410,42 @@ class Store:
         finally:
             con.close()
 
+    def acquire_service_lock(self):
+        """Hold ``<db>.service.lock`` for the lifetime of the running service.
+
+        ``server.backup restore`` probes this lock and refuses to replace the
+        database while the service is up. A ``BEGIN EXCLUSIVE`` probe only sees
+        the instant it runs, so it cannot prove the service is stopped.
+        """
+        if self._service_lock is not None:
+            return self._service_lock
+        handle = open(self.service_lock_path, "a+b")
+        if fcntl is not None:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                handle.close()
+                raise WorldBusy("another idle-ops service instance is running") from exc
+        self._service_lock = handle
+        return handle
+
+    @staticmethod
+    def service_running(path):
+        """True when another process holds the service lock for ``path``."""
+        lock_path = os.fspath(path) + ".service.lock"
+        if fcntl is None or not os.path.exists(lock_path):  # pragma: no cover
+            return False
+        handle = open(lock_path, "a+b")
+        try:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return True
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            return False
+        finally:
+            handle.close()
+
     def readiness(self):
         try:
             con = self._connect()
@@ -360,18 +470,44 @@ class Store:
             return {"ok": False, "schemaVersion": None, "expectedSchemaVersion": SCHEMA_VERSION}
 
     def hard_reset(self, now=None, op_id=None, actor=""):
-        """Back up the database, then zero the world. Fails closed on backup error."""
-        if self._op_seen(op_id):
-            return self.world(now, action={"type": "hardReset"}, op_id=op_id, actor=actor)
-        backup = self.backup("pre-hardreset", now=self._now() if now is None else now, keep=0)
-        return self.world(
-            now,
-            action={"type": "hardReset", "backup": backup},
-            op_id=op_id,
-            actor=actor,
-        )
+        """Back up the database, then zero the world. Fails closed on backup error.
 
-    def world(self, now=None, action=None, op_id=None, actor="", since=None) -> WorldResult:
+        Operation ordering (all inside the exclusive write gate):
+          1. settle the world to ``now`` and commit it, so the action and its
+             audit record start from one exact, persisted state;
+          2. take and verify a ``pre-hardreset`` snapshot of that committed
+             state — no other world write can slip in between;
+          3. advance to ``now`` again (zero elapsed), apply the reset, audit and
+             commit.
+
+        A retry with the same opId replays the recorded result without a second
+        backup or reset. Concurrent hard resets and ordinary world writes queue
+        on the gate; if the queue outlives the deadline the API returns 503.
+        """
+        with self.gate.exclusive():
+            moment = self._now() if now is None else float(now)
+            if op_id is not None and self._op_seen(op_id):
+                return self._world(
+                    moment, action={"type": "hardReset"}, op_id=op_id, actor=actor,
+                )
+            # Commit the exact state the backup copies and the reset replaces.
+            self._world(moment)
+            backup = self.backup("pre-hardreset", now=moment, keep=0)
+            return self._world(
+                moment,
+                action={"type": "hardReset", "backup": backup},
+                op_id=op_id,
+                actor=actor,
+            )
+
+    def world(self, now=None, action=None, op_id=None, actor="", since=None, gated=True,
+              lock_timeout=WORLD_LOCK_TIMEOUT) -> WorldResult:
+        if not gated:
+            return self._world(now, action=action, op_id=op_id, actor=actor, since=since)
+        with self.gate.shared(timeout=lock_timeout):
+            return self._world(now, action=action, op_id=op_id, actor=actor, since=since)
+
+    def _world(self, now=None, action=None, op_id=None, actor="", since=None) -> WorldResult:
         actor = _clean_actor(actor)
         con = self._connect()
         try:

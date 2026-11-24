@@ -70,6 +70,28 @@ class StoreTests(unittest.TestCase):
         self.assertGreater(second.gains["requests"], 0)
         self.assertGreater(second.state["requests"], first.state["requests"])
 
+    def test_admin_timestamps_are_per_admin(self):
+        store = self.open()
+        store.world(NOW, actor="alice")
+        alice = store.world(NOW + 100, actor="alice")
+        self.assertAlmostEqual(alice.away_seconds, 100.0)
+        self.assertEqual(alice.timestamps["adminLastSeen"], NOW)
+        self.assertEqual(alice.timestamps["worldSettledAt"], NOW + 100)
+        settled_total = alice.state["total_lifetime"]
+
+        bob = store.world(NOW + 100, actor="bob")
+        self.assertEqual(bob.away_seconds, 0.0)
+        self.assertEqual(bob.gains["seconds"], 0.0)
+        self.assertEqual(bob.state["total_lifetime"], settled_total)
+
+        again = store.world(NOW + 105, actor="alice")
+        self.assertAlmostEqual(again.away_seconds, 5.0)
+        self.assertAlmostEqual(
+            again.state["total_lifetime"] - bob.state["total_lifetime"],
+            again.gains["requests"],
+            places=6,
+        )
+
     def test_every_actor_sees_the_same_world(self):
         store = self.open()
         store.world(NOW, actor="alice")

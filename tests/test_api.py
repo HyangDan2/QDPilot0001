@@ -106,6 +106,16 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(status, 409)
         self.assertIn("opId", body["detail"])
 
+    def test_admin_payload_has_independent_timestamps(self):
+        status, _, body = self.call("GET", ADMIN + "/api/v1/state", user="stamp_admin")
+        self.assertEqual(status, 200)
+        stamps = body["timestamps"]
+        for key in ("worldSettledAt", "adminLastSeen", "adminLastCheck", "lastRewardAt", "awaySeconds"):
+            self.assertIn(key, stamps)
+        self.assertGreaterEqual(stamps["worldSettledAt"], stamps["adminLastCheck"])
+        public = self.call("GET", WORLD + "/api/v1/state", user=None)[2]
+        self.assertNotIn("timestamps", public)
+
     def test_public_read_does_not_touch_the_database(self):
         self.call("GET", ADMIN + "/api/v1/state")
         with sqlite3.connect(self.store.path) as con:

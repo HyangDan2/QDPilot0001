@@ -47,10 +47,12 @@ class WorldResult:
     details: dict | None = None
     duplicate: bool = False
     now: float = 0.0
+    away: float = 0.0
+    timestamps: dict | None = None
 
     @property
     def away_seconds(self):
-        return float(self.gains.get("seconds") or 0.0)
+        return float(self.away)
 
 
 def _action_key(action):
@@ -108,6 +110,12 @@ class Store:
                     op_id      TEXT NOT NULL,
                     created_at REAL NOT NULL,
                     PRIMARY KEY (username, op_id)
+                ) WITHOUT ROWID;
+                CREATE TABLE IF NOT EXISTS admin_seen (
+                    username       TEXT PRIMARY KEY,
+                    last_seen      REAL NOT NULL,
+                    last_reward_at REAL NOT NULL,
+                    checks         INTEGER NOT NULL DEFAULT 0
                 ) WITHOUT ROWID;
                 CREATE TABLE IF NOT EXISTS audit_log (
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -282,6 +290,29 @@ class Store:
                     con, now, "achievement", actor, {"achievement": achievement_id},
                 ))
 
+            away = float(gains["seconds"])
+            timestamps = None
+            if actor:
+                seen = con.execute(
+                    "SELECT last_seen, last_reward_at FROM admin_seen WHERE username = ?",
+                    (actor,),
+                ).fetchone()
+                away = max(0.0, now - seen["last_reward_at"]) if seen else 0.0
+                timestamps = {
+                    "worldSettledAt": now,
+                    "adminLastSeen": seen["last_seen"] if seen else now,
+                    "adminLastCheck": now,
+                    "lastRewardAt": seen["last_reward_at"] if seen else now,
+                    "awaySeconds": away,
+                }
+                con.execute(
+                    "INSERT INTO admin_seen (username, last_seen, last_reward_at, checks) "
+                    "VALUES (?, ?, ?, 1) ON CONFLICT(username) DO UPDATE SET "
+                    "last_seen = excluded.last_seen, last_reward_at = excluded.last_reward_at, "
+                    "checks = admin_seen.checks + 1",
+                    (actor, now, now),
+                )
+
             if action is not None and not duplicate:
                 before = None
                 if action.get("type") == "hardReset":
@@ -355,6 +386,8 @@ class Store:
                 details=details,
                 duplicate=duplicate,
                 now=now,
+                away=away,
+                timestamps=timestamps,
             )
         except Exception:
             con.execute("ROLLBACK")

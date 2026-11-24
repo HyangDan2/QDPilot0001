@@ -71,6 +71,7 @@ def build_payload(result, now):
         "duplicate": result.duplicate,
         "events": result.events,
         "cursor": result.cursor,
+        **({"timestamps": result.timestamps} if result.timestamps else {}),
     }
 
 

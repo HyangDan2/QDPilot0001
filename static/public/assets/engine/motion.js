@@ -89,14 +89,27 @@ export class HeroController {
     }
 
     if (hero.mode === "run") {
+      const bug = hero.target?.kind === "bug" ? hero.target.ref : null;
+      if (bug && bug.state !== "alive") {
+        hero.target = null;
+        this.setMode("idle");
+        hero.timer = rand(0.2, 0.6);
+        return;
+      }
+      if (bug) {
+        const margin = scene.heroMargin;
+        hero.targetX = clamp(bug.x, margin, Math.max(margin, scene.width - margin));
+        hero.targetY = clamp(bug.y + 2, floorTop, floorBottom);
+      }
       const dx = hero.targetX - hero.x;
       const dy = hero.targetY - hero.y;
       const dist = Math.hypot(dx, dy);
       const speed = scene.width * MOTION.speedRatio;
-      if (dist < 6) {
+      const reach = bug ? MOTION.attackRange : 6;
+      if (dist <= reach) {
         hero.x = hero.targetX;
         hero.y = hero.targetY;
-        if (hero.target && hero.target.kind === "bug") {
+        if (bug) {
           hero.impact = 0;
           this.setMode("attack");
           hero.timer = MOTION.attackSeconds;

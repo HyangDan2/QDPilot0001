@@ -37,6 +37,7 @@ export const MOTION = {
   dustHz: 0.09,
   attackSeconds: 0.75,
   repairSeconds: 0.8,
+  attackRange: 26,
   bugSpawn: [6.5, 12.5],
   bugSpeed: [10, 34],
 };

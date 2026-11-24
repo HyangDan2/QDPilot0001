@@ -35,7 +35,7 @@ export class SpriteLibrary {
 
   async load() {
     try {
-      const response = await fetch(this.manifestUrl, { cache: "force-cache" });
+      const response = await fetch(this.manifestUrl, { cache: "no-cache" });
       if (response.ok) {
         const data = await response.json();
         this.manifest = { ...DEFAULT_MANIFEST, ...data, states: { ...DEFAULT_MANIFEST.states, ...(data.states || {}) } };

@@ -718,101 +718,95 @@ async function load({ initial = false } = {}) {
   }
 }
 
-const OP_KEY = "hd2lab-idle-op";
-
-function readPendingOp() {
-  try {
-    return JSON.parse(sessionStorage.getItem(OP_KEY) || "null");
-  } catch (error) {
-    return null;
-  }
-}
-
-function writePendingOp(value) {
-  try {
-    if (value) sessionStorage.setItem(OP_KEY, JSON.stringify(value));
-    else sessionStorage.removeItem(OP_KEY);
-  } catch (error) { /* storage may be blocked */ }
-}
-
-async function replayPending(pending) {
-  try {
-    const response = await fetch(pending.path, {
-      method: "POST",
-      credentials: "same-origin",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: pending.body,
-    });
-    if (response.ok) {
-      writePendingOp(null);
-      load();
-      return true;
+const opCoordinator = window.HD2OperationCoordinator.createOperationCoordinator({
+  storage: (() => {
+    try {
+      return window.sessionStorage;
+    } catch (error) {
+      return null;
     }
-    if (response.status >= 400 && response.status < 500) {
-      writePendingOp(null);
-      return true;
-    }
-    return false;
-  } catch (error) {
-    return false;
-  }
+  })(),
+  makeId: makeOpId,
+});
+
+function opSignature(path, fields) {
+  return `${path}|${JSON.stringify(fields)}`;
 }
 
-function resolvePendingOp() {
-  const pending = readPendingOp();
-  if (pending && pending.path) replayPending(pending);
+async function resolvePendingOp() {
+  // Recovery takes the same lock as a user action, so a click cannot mint a
+  // second opId while the startup replay is still outstanding.
+  if (game.pending || !opCoordinator.hasPending()) return;
+  game.pending = true;
+  render();
+  try {
+    const result = await opCoordinator.recover();
+    if (result.status === "ok") {
+      accept(result.data);
+      return;
+    }
+    if (result.status === "auth") {
+      setSync("error", "로그인 필요");
+      showAuth(true);
+      return;
+    }
+    if (result.status === "rejected") {
+      toast(localizeError(result.message || "요청이 거부되었습니다."), { error: true });
+      return;
+    }
+    if (result.status === "retry") {
+      setSync("stale", "동기화 지연");
+      toast("이전 요청을 확인하지 못했습니다. 연결이 회복되면 같은 작업으로 이어서 처리합니다.", { error: true });
+    }
+  } finally {
+    game.pending = false;
+    render();
+    if (!game.payload && !game.authError) load({ initial: true });
+  }
 }
 
 async function submitAction(action, { reset = false, hardReset = false } = {}) {
   if (game.pending || game.authError) return null;
   const path = hardReset ? `${API}/hard-reset` : reset ? `${API}/reset` : `${API}/actions`;
   const fields = hardReset ? { confirm: "HARD RESET" } : reset ? {} : { action };
-  const signature = `${path}|${JSON.stringify(fields)}`;
-  let pending = readPendingOp();
-  if (pending && pending.signature !== signature) {
-    // Never mint a new opId while an earlier one is unresolved.
-    const settled = await replayPending(pending);
-    if (!settled) {
-      toast("이전 요청을 확인하지 못했습니다. 연결을 확인한 뒤 다시 시도하세요.", { error: true });
-      return null;
-    }
-    pending = null;
-  }
-  const opId = pending && pending.opId ? pending.opId : makeOpId();
-  const body = JSON.stringify({ ...fields, opId });
-  pending = { opId, signature, path, body };
-  writePendingOp(pending);
   game.pending = true;
   hideError();
   render();
   const seq = ++requestSeq;
   try {
-    const data = await request(path, {
-      method: "POST",
-      body,
+    const result = await opCoordinator.submit({
+      path,
+      fields,
+      signature: opSignature(path, fields),
     });
-    writePendingOp(null);
-    if (seq < appliedSeq) return null;
-    appliedSeq = seq;
-    accept(data);
-    return data;
-  } catch (error) {
-    if (error.auth) {
-      writePendingOp(null);
+    if (result.status === "ok") {
+      if (seq < appliedSeq) return null;
+      appliedSeq = seq;
+      accept(result.data);
+      return result.data;
+    }
+    if (result.status === "auth") {
+      // The opId stays pending; re-login replays it once through recover().
       setSync("error", "로그인 필요");
       showAuth(true);
       return null;
     }
-    if (error.status === 400 || error.status === 413 || error.status === 403 || error.status === 409) {
-      writePendingOp(null);
-      toast(localizeError(error.message), { error: true });
+    if (result.status === "rejected") {
+      toast(localizeError(result.message || "요청이 거부되었습니다."), { error: true });
       return null;
     }
+    if (result.status === "blocked") {
+      toast("이전 요청을 확인하지 못했습니다. 연결을 확인한 뒤 다시 시도하세요.", { error: true });
+      return null;
+    }
+    if (result.status === "busy" || result.status === "invalid") return null;
     game.failures += 1;
     setSync("stale", "동기화 지연");
-    showError(localizeError(error.message));
-    toast(`${localizeError(error.message)} 같은 작업을 다시 누르면 이어서 처리합니다.`, { error: true });
+    const message = result.message === "network"
+      ? "서버에 연결하지 못했습니다."
+      : localizeError(result.message || "동기화 지연");
+    showError(message);
+    toast(`${message} 같은 작업을 다시 누르면 이어서 처리합니다.`, { error: true });
     return null;
   } finally {
     game.pending = false;

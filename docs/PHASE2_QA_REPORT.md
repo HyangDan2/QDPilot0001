@@ -3,7 +3,7 @@
 - 대상: `feature/phase2-core-evolution` (base `main` `326709d`)
 - 작성일: 2026-11-25 (KST)
 - 결론: Phase 2 제출 시점 자동 테스트 128개 통과(개발 호스트·Raspberry Pi 모두), 2F 매트릭스는
-  아래 표의 범위에서 실행했습니다. **Phase 2.1 교정 후에는 Python 187개 + Node 22개가 통과**하며,
+  아래 표의 범위에서 실행했습니다. **Phase 2.1 릴리스 게이트 후에는 Python 207개 + Node 22개가 통과**하며,
   최신 결과는 [`PHASE2_1_QA_REPORT.md`](PHASE2_1_QA_REPORT.md)를 따릅니다.
   **운영 Nginx 경유·WAN 관전자·실기 디스플레이는 미실측이며**, Raspberry Pi는 1차 실측(서버 부하 +
   headless 브라우저)만 수행했습니다. 모바일 실기 Safari, 운영 SSO 역할 검증, 운영 DB 마이그레이션은
@@ -41,9 +41,9 @@ Ran 128 tests in 19.704s
 
 OK
 
-# Phase 2.1 교정 후 (현재 트리)
+# Phase 2.1 릴리스 게이트 (현재 트리, WO-10)
 $ python3 -m unittest discover -s tests -t .
-Ran 187 tests in 10.411s
+Ran 207 tests in 10.639s
 
 OK
 
@@ -51,9 +51,10 @@ $ node --test tests/js/sprite_manifest.test.mjs tests/js/op_coordinator.test.mjs
 # pass 22
 ```
 
-- 기준선(main): 61개 → Phase 2: 128개 → Phase 2.1: 187개. 기존 테스트 삭제·통과 조건 완화 없음.
+- 기준선(main): 61개 → Phase 2: 128개 → Phase 2.1: 207개(WO-09 커밋 시점 187). 기존 테스트 삭제·통과 조건 완화 없음.
   Phase 2.1 신규 파일: `test_world_revision.py`, `test_backup_hardening.py`, `test_checkpoints.py`,
-  `test_economy_limits.py`, `test_hard_reset.py`, `test_ops_hardening.py`, Node `tests/js/*.test.mjs`.
+  `test_economy_limits.py`, `test_hard_reset.py`, `test_ops_hardening.py`, `test_release_gate.py`,
+  Node `tests/js/*.test.mjs`.
 
 ## 3. 2F 필수 QA 매트릭스
 

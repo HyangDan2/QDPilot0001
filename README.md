@@ -42,7 +42,7 @@ static/public/assets/sprites/  # 스프라이트와 manifest.json (시트 미납
 art/                # 웹 루트 밖 아트 원본(source)·반입 대기(export) — 서빙되지 않음
 docs/               # GAME_DESIGN, ECONOMY_SPEC, ANIMATION_SPEC, ART_DIRECTION, ASSET_REQUIREMENTS, DB_MIGRATION, PHASE2_*, PERFORMANCE_REPORT, notes
 tools/              # qa_perf.py — 공개/관리자 부하·soak 하네스 (표준 라이브러리)
-tests/              # 128개 단위·통합 테스트 (UDS 포함)
+tests/              # 207개 단위·통합 테스트 (UDS·릴리스 게이트 포함)
 ```
 
 ## 로컬 실행
@@ -72,7 +72,7 @@ python3 -m server --dev-user hd2service --static-root static --public-root stati
 | `POST /hard-reset` | `{"opId":"...","confirm":"HARD RESET"}` — Chairman 전용(admiral 서비스 권한 + chairman 계정 역할) |
 | `GET /whoami` | 호출자의 신뢰된 SSO 역할과 `canHardReset` (UI에서 위험 버튼 숨김용, 서버가 다시 강제) |
 | `GET /content` | 밸런스 버전·지문·피처 플래그(기본 off)·임계값 (상태 미포함) |
-| `GET /health/ready` | `{"status":"ok","service":"idle-ops",...}` — 실패 시 503 (인증 없음) |
+| `GET /health/ready` | `{"status":"ok","service":"idle-ops","checks":{"world":true,"schema":true,"disk":true}}` — world 행·스키마 버전·여유 공간만 불리언으로 노출, 실패 시 503 (인증 없음) |
 
 Hard Reset 권한은 Server-HQ admin-auth의 실제 계정 체계를 따릅니다. `admiral_only` 서비스에서
 `X-HD2Lab-Role`은 Chairman과 grant된 admiral 모두에게 `admiral`로 내려오므로, 파괴적 권한은
@@ -94,7 +94,7 @@ Hard Reset 권한은 Server-HQ admin-auth의 실제 계정 체계를 따릅니�
 ## 테스트
 
 ```bash
-python3 -m unittest discover -s tests -t . -v   # 128 tests (실제 UDS 4건 포함)
+python3 -m unittest discover -s tests -t . -v   # 207 tests (실제 UDS 4건 포함)
 
 # 부하·soak (실행 중인 서버 대상, 프록시 우회 내장)
 python3 tools/qa_perf.py public --base http://127.0.0.1:8123 --viewers 100 --seconds 30 --interval 1
@@ -104,6 +104,11 @@ python3 tools/qa_perf.py action --base http://127.0.0.1:8123 --workers 10 --ops 
 Phase 2 검증 결과: [`docs/PHASE2_QA_REPORT.md`](docs/PHASE2_QA_REPORT.md),
 [`docs/PERFORMANCE_REPORT.md`](docs/PERFORMANCE_REPORT.md), 구현 범위·커밋은
 [`docs/PHASE2_IMPLEMENTATION_REPORT.md`](docs/PHASE2_IMPLEMENTATION_REPORT.md).
+
+Phase 2.1(교정·릴리스 게이트) 결과: [`docs/PHASE2_1_CORRECTION_REPORT.md`](docs/PHASE2_1_CORRECTION_REPORT.md),
+[`docs/PHASE2_1_QA_REPORT.md`](docs/PHASE2_1_QA_REPORT.md),
+[`docs/PHASE2_1_RELEASE_GATE.md`](docs/PHASE2_1_RELEASE_GATE.md),
+[`docs/PHASE2_1_PERFORMANCE_REPORT.md`](docs/PHASE2_1_PERFORMANCE_REPORT.md).
 
 ## 배포 (요약)
 

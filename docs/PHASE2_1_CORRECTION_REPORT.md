@@ -18,7 +18,7 @@ Phase 2 제출 후 워크오더의 교정 항목(WO-01~10)을 순서대로 반�
 | 기존 운영 DB·진행 기록 보존 | 운영 DB 미접속. 모든 검증은 임시 DB. 마이그레이션은 가산적(`ALTER TABLE`, `CREATE INDEX`) |
 | 밸런스 무단 변경 금지 | `server/economy.py` 수치 변경 없음. `test_content` 지문 테스트 유지 |
 | 신규 아트워크 임의 생성 금지 | 최종 아트 미생성. 테스트용 번호 타일만 `tests/fixtures/sprites/`에 커밋, 배포 트리 제외 |
-| 테스트 삭제·조건 완화 금지 | 기존 테스트 유지. Phase 2 기준선 61 → 128 → **187**(Python) + 22(Node) |
+| 테스트 삭제·조건 완화 금지 | 기존 테스트 유지. Phase 2 기준선 61 → 128 → **207**(Python, WO-10 기준) + 22(Node) |
 | main 자동 병합·운영 배포 금지 | 커밋·푸시만 수행, 병합/배포/라이브 DB 마이그레이션 없음 |
 | 권한 이름 추측 금지 | Hard Reset 권한은 `X-HD2Lab-Role=admiral` **과** `X-HD2Lab-Account-Role=chairman` 이중 신호(WO-02) |
 | 미실측 성능을 운영 실측으로 보고 금지 | 모든 수치는 호스트·커밋과 함께 표기, Pi/운영 미측정 항목은 별도 표기 |
@@ -35,8 +35,8 @@ Phase 2 제출 후 워크오더의 교정 항목(WO-01~10)을 순서대로 반�
 | WO-06 | `world.revision`·스냅샷 일관 공개 읽기·stale/503 | `3bf72df` | `test_world_revision.py` |
 | WO-07 | 관리자 변경 op 직렬화(중복·충돌·재시도) | `3b93a1a` | Node `tests/js/op_coordinator.test.mjs` |
 | WO-08 | 자산별 facing 정정, manifest v3, 상태별 지연 로딩, 아트 문서 | `7c6cfc2` | Node 13 + 브라우저 스크린샷/아틀라스 E2E |
-| WO-09 | readiness 검증·공개 정보 최소화, 타임아웃/동시성, 보존 검토, 보고서 정정 | 이 보고서 커밋 | `test_ops_hardening.py` + 전체 187 |
-| WO-10 | REG-01~20 회귀, 성능 비교, 320~1920 스크린샷, 1시간 실행, 릴리스 게이트 | 이후 커밋 | [`PHASE2_1_RELEASE_GATE.md`](PHASE2_1_RELEASE_GATE.md) |
+| WO-09 | readiness 검증·공개 정보 최소화, 타임아웃/동시성, 보존 검토, 보고서 정정 | `2d21721` | `test_ops_hardening.py` + 당시 전체 187 |
+| WO-10 | REG-01~20 회귀, 성능 비교, 320~1920 스크린샷, 1시간 실행, 릴리스 게이트 | 이 커밋 | [`PHASE2_1_RELEASE_GATE.md`](PHASE2_1_RELEASE_GATE.md), 전체 207 |
 
 ### 2.1 WO-08 요약 — 방향·매니페스트·지연 로딩
 
@@ -105,7 +105,7 @@ Phase 2 제출 후 워크오더의 교정 항목(WO-01~10)을 순서대로 반�
 
 | 문서 | 이전 서술 | 정정 |
 | --- | --- | --- |
-| `PHASE2_IMPLEMENTATION_REPORT` | 테스트 128, 왼쪽 facing, 스키마 v2, `storage` readiness | 정정 배너 + 187/오른쪽 원본·자산별 facing/v4/불리언 checks/rate limit 정책 반영 |
+| `PHASE2_IMPLEMENTATION_REPORT` | 테스트 128, 왼쪽 facing, 스키마 v2, `storage` readiness | 정정 배너 + 207/오른쪽 원본·자산별 facing/v4/불리언 checks/rate limit 정책 반영 |
 | `PHASE2_QA_REPORT` | "2F 필수 매트릭스 전 항목 실행 완료" | 범위 명시, 47분 브라우저 실행을 **PARTIAL(1시간 미달)**로 표기, SSO/Pi/Nginx 미실행 명시 |
 | `PERFORMANCE_REPORT` | Pi 실측이 현재 트리처럼 읽힘, manifest v2 | Phase 2 시점(`bd63a75`) 측정임을 명시, Pi 재측정 필요 |
 | `DB_MIGRATION` | `user_version=2`, `storage` JSON 상세 | v3/v4 추가, 불리언 checks, kind별 실제 백업 보존, 보존·정리 정책표 |

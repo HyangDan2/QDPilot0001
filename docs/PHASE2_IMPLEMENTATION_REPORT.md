@@ -6,7 +6,7 @@
 - 상태: **PO 리뷰 요청** — 운영 배포·main 병합은 수행하지 않았습니다.
 
 > **Phase 2.1 정정(2026-11-25)**: 이 문서는 Phase 2 제출(`bd63a75` 계열) 시점 기록입니다.
-> 이후 교정 워크오더(WO-01~08)로 테스트 수(128→187 Python, +22 Node), 스프라이트 방향
+> 이후 교정 워크오더(WO-01~10)로 테스트 수(128→207 Python, +22 Node), 스프라이트 방향
 > (왼쪽→자산별 `facing`, 향단이 원본은 오른쪽), manifest v2→v3 지연 로딩, 스키마 v2→v4,
 > readiness 응답(상세 `storage`→불리언 `checks`)이 바뀌었습니다. 본문의 해당 부분에는
 > 정정을 반영했고, 최신 결과는
@@ -41,8 +41,8 @@
   Python 3.11.2)에 브랜치를 임시 클론해 128개 테스트 OK, 공개 1/10/100명·soak 전 구간 HTTP 200·lock 0,
   headless Chromium FPS 18~21을 확인했습니다(운영 Nginx 경유·실기 디스플레이는 미실측). **Phase 2.1
   교정 이후 Pi 재측정은 아직 수행하지 않았습니다.**
-- 테스트: `python3 -m unittest discover -s tests -t .` → **187개 통과**(Phase 2 기준선 61개 →
-  Phase 2 128개 → Phase 2.1 187개). Node 테스트 22개(`node --test tests/js/*.test.mjs`)도 통과합니다.
+- 테스트: `python3 -m unittest discover -s tests -t .` → **207개 통과**(Phase 2 기준선 61개 →
+  Phase 2 128개 → Phase 2.1 207개, WO-09 커밋 시점 187). Node 테스트 22개(`node --test tests/js/*.test.mjs`)도 통과합니다.
 
 ## 3. Phase 2A — 게임 경제 엔진 안정화
 
@@ -353,17 +353,18 @@ Phase 2.1 교정(별도 커밋, 각 WO별 독립):
 | WO-06 | `3bf72df` | `world.revision`·스냅샷 일관 공개 읽기 |
 | WO-07 | `3b93a1a` | 관리자 변경 op 직렬화 |
 | WO-08 | `7c6cfc2` | 자산별 facing·manifest v3·지연 로딩·아트 문서 |
-| WO-09 | 이후 커밋 | readiness·타임아웃·보존 검토·보고서 정정 |
-| WO-10 | 이후 커밋 | 릴리스 게이트 회귀·장시간 실행·릴리스 문서 |
+| WO-09 | `2d21721` | readiness·타임아웃·보존 검토·보고서 정정 |
+| WO-10 | 이 커밋 | 릴리스 게이트 회귀·장시간 실행·릴리스 문서 |
 
 이 보고서·QA 보고서·성능 보고서는 2F 문서 커밋 하나로 제출합니다(자기 SHA는 커밋 목록에 표기하지 않음).
 
 ## 12. 신규 테스트 및 실행 결과
 
 - Phase 2 제출 시점: **128개 통과** (기준선 main 61개 → 신규 70개, 기존 3개는 더 엄격한 테스트로 대체)
-- Phase 2.1 시점(현재): **187개 통과** — `test_api.py` 34, `test_economy.py` 46, `test_store.py` 36,
+- Phase 2.1 시점(현재): **207개 통과** — `test_api.py` 35, `test_economy.py` 46, `test_store.py` 36,
   `test_backup.py` 4, `test_content.py` 8, `test_backup_hardening.py`, `test_checkpoints.py`,
-  `test_economy_limits.py`, `test_hard_reset.py`, `test_ops_hardening.py`, `test_world_revision.py` 포함.
+  `test_economy_limits.py`, `test_hard_reset.py`, `test_ops_hardening.py`, `test_world_revision.py`,
+  `test_release_gate.py` 포함.
 - Node: `node --test tests/js/sprite_manifest.test.mjs tests/js/op_coordinator.test.mjs` → **22개 통과**
   (manifest v3 정규화·슬라이스·facing·지연 로딩/쿨다운, 관리자 op 조정).
 - 실행 명령: `python3 -m unittest discover -s tests -t .`

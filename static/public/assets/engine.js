@@ -77,6 +77,11 @@ export class WorldScene {
     this.resize();
     window.addEventListener("resize", this.resize);
     window.addEventListener("orientationchange", this.resize);
+    window.visualViewport?.addEventListener?.("resize", this.resize);
+    if ("ResizeObserver" in window) {
+      this.resizeObserver = new ResizeObserver(this.resize);
+      this.resizeObserver.observe(this.canvas);
+    }
     document.addEventListener("visibilitychange", this.visibility);
     this.loadSprites();
     this.start();
@@ -165,6 +170,13 @@ export class WorldScene {
     this.render();
   }
 
+  floorBounds() {
+    const bottomPad = this.width <= 640 ? 124 : 72;
+    const top = this.floorY + Math.min(this.height * 0.06, 42);
+    const bottom = Math.max(top + 28, Math.min(this.height * 0.86, this.height - bottomPad));
+    return { top, bottom };
+  }
+
   homeHero() {
     const home = this.heroSpot();
     this.hero.x = home.x;
@@ -175,15 +187,15 @@ export class WorldScene {
   }
 
   heroSpot() {
+    const { top, bottom } = this.floorBounds();
     return {
       x: clamp(this.width * 0.5, 60, this.width - 60),
-      y: this.floorY + Math.min(this.height * 0.16, 96),
+      y: clamp(this.floorY + Math.min(this.height * 0.14, 84), top, bottom),
     };
   }
 
   clampHero() {
-    const top = this.floorY + this.height * 0.075;
-    const bottom = this.height * 0.88;
+    const { top, bottom } = this.floorBounds();
     this.hero.x = clamp(this.hero.x, 40, Math.max(40, this.width - 40));
     this.hero.y = clamp(this.hero.y, top, bottom);
   }
@@ -250,9 +262,10 @@ export class WorldScene {
 
     const count = slots.length;
     const margin = width * (width < 640 ? 0.08 : 0.11);
-    const usable = width - margin * 2;
+    const usable = Math.max(60, width - margin * 2);
     const maxW = width < 640 ? 78 : 108;
-    const gap = count > 1 ? Math.min(34, (usable - count * maxW) / (count - 1)) : 0;
+    const minGap = width < 640 ? 10 : 14;
+    const gap = count > 1 ? clamp((usable - count * maxW) / (count - 1), minGap, 34) : 0;
     const rackW = Math.min(maxW, count > 1 ? (usable - gap * (count - 1)) / count : maxW * 1.1);
     const totalW = rackW * count + gap * Math.max(0, count - 1);
     const startX = (width - totalW) / 2;
@@ -320,8 +333,7 @@ export class WorldScene {
   }
 
   updateBugs(dt) {
-    const floorTop = this.floorY + this.height * 0.055;
-    const floorBottom = this.height * 0.9;
+    const { top: floorTop, bottom: floorBottom } = this.floorBounds();
     for (const bug of this.bugs) {
       bug.age += dt;
       bug.bob = Math.sin(this.time * 5 + bug.phase) * 4;
@@ -412,12 +424,13 @@ export class WorldScene {
 
   chooseTask() {
     const hero = this.hero;
+    const { top: floorTop, bottom: floorBottom } = this.floorBounds();
     const alive = this.bugs.filter((bug) => bug.state === "alive");
     if (alive.length) {
       const target = pick(alive);
       hero.target = { kind: "bug", ref: target };
       hero.targetX = target.x;
-      hero.targetY = clamp(target.y + 2, this.floorY + this.height * 0.075, this.height * 0.88);
+      hero.targetY = clamp(target.y + 2, floorTop, floorBottom);
       hero.mode = "run";
       hero.timer = 0;
       return;
@@ -426,16 +439,17 @@ export class WorldScene {
     const rack = racks.length ? pick(racks) : this.racks[0];
     hero.target = { kind: "rack", ref: rack };
     hero.targetX = clamp((rack ? rack.x : this.width * 0.5) + rand(-30, 30), 40, this.width - 40);
-    hero.targetY = clamp((rack ? rack.base : this.floorY) + rand(30, 70), this.floorY + 70, this.height * 0.87);
+    hero.targetY = clamp((rack ? rack.base : this.floorY) + rand(30, 70), floorTop, floorBottom);
     hero.mode = "run";
     hero.timer = 0;
   }
 
   spawnBug(xRatio) {
+    const { top: floorTop, bottom: floorBottom } = this.floorBounds();
     const x = this.width * (xRatio ?? rand(0.16, 0.84));
     this.bugs.push({
       x,
-      y: rand(this.floorY + this.height * 0.09, this.height * 0.86),
+      y: rand(floorTop, floorBottom),
       vx: rand(10, 34) * (Math.random() < 0.5 ? -1 : 1),
       phase: rand(0, TAU),
       age: 0,
@@ -1034,6 +1048,8 @@ export class WorldScene {
     this.stop();
     window.removeEventListener("resize", this.resize);
     window.removeEventListener("orientationchange", this.resize);
+    window.visualViewport?.removeEventListener?.("resize", this.resize);
+    this.resizeObserver?.disconnect();
     document.removeEventListener("visibilitychange", this.visibility);
     this.motionQuery.removeEventListener?.("change", this.onMotionChange);
   }

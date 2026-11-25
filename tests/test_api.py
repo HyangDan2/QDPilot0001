@@ -204,6 +204,12 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(headers["Content-Type"], "text/css; charset=utf-8")
         self.assertGreater(len(body), 1000)
 
+        status, headers, body = self.call("GET", ADMIN + "/assets/app.js")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "text/javascript; charset=utf-8")
+        self.assertIn(b"/auth/session", body)
+        self.assertIn(b"X-CSRF-Token", body)
+
         status, headers, body = self.call("GET", ADMIN + "/assets/hyangdani-hero.jpg", user=None)
         self.assertEqual(status, 200)
         self.assertEqual(headers["Content-Type"], "image/jpeg")

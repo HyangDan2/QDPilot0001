@@ -1,4 +1,5 @@
 const API = "./api/v1";
+const SESSION_URL = "/auth/session";
 const POLL_MS = 15000;
 const AWAY_THRESHOLD = 300;
 const LEVEL_STEP = 10000;
@@ -83,6 +84,8 @@ const game = {
 
 let requestSeq = 0;
 let appliedSeq = 0;
+let csrfToken = "";
+let csrfPromise = null;
 let rackSignature = "";
 const buildRefs = new Map();
 let buildQty = null;
@@ -201,21 +204,66 @@ function currentLifetime() {
 
 /* ---------- API ---------- */
 
+async function ensureCsrf({ force = false } = {}) {
+  if (!force && csrfToken) return csrfToken;
+  if (!force && csrfPromise) return csrfPromise;
+  const pending = (async () => {
+    try {
+      const response = await fetch(SESSION_URL, {
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) return "";
+      const data = await response.json();
+      if (data && data.authenticated && typeof data.csrf === "string" && data.csrf) {
+        csrfToken = data.csrf;
+        return csrfToken;
+      }
+      csrfToken = "";
+      return "";
+    } catch (error) {
+      return "";
+    } finally {
+      if (csrfPromise === pending) csrfPromise = null;
+    }
+  })();
+  csrfPromise = pending;
+  return pending;
+}
+
 async function request(url, options = {}) {
-  const headers = { Accept: "application/json", ...(options.headers || {}) };
-  if (options.body) headers["Content-Type"] = "application/json";
+  const { _csrfRetried = false, ...fetchOptions } = options;
+  const method = (fetchOptions.method || "GET").toUpperCase();
+  const isWrite = method !== "GET" && method !== "HEAD";
+  const headers = { Accept: "application/json", ...(fetchOptions.headers || {}) };
+  if (fetchOptions.body) headers["Content-Type"] = "application/json";
+  if (isWrite && !headers["X-CSRF-Token"]) {
+    const token = await ensureCsrf();
+    if (token) headers["X-CSRF-Token"] = token;
+  }
   let response;
   try {
     response = await fetch(url, {
       credentials: "same-origin",
       cache: "no-store",
-      ...options,
+      ...fetchOptions,
       headers,
     });
   } catch (error) {
     const network = new Error("network");
     network.network = true;
     throw network;
+  }
+  if (isWrite && response.status === 403 && !_csrfRetried) {
+    const refreshed = await ensureCsrf({ force: true });
+    if (refreshed && refreshed !== headers["X-CSRF-Token"]) {
+      return request(url, {
+        ...fetchOptions,
+        _csrfRetried: true,
+        headers: { ...(fetchOptions.headers || {}), "X-CSRF-Token": refreshed },
+      });
+    }
   }
   let data = null;
   try {
@@ -224,6 +272,7 @@ async function request(url, options = {}) {
     data = null;
   }
   if (response.status === 401) {
+    csrfToken = "";
     const auth = new Error("auth");
     auth.auth = true;
     throw auth;
@@ -247,6 +296,7 @@ function localizeError(detail) {
     [/invalid action/i, "지원하지 않는 동작입니다."],
     [/invalid opId/i, "요청 식별자가 올바르지 않습니다."],
     [/admin authentication required/i, "로그인이 필요합니다."],
+    [/요청 권한|요청을 확인|forbidden|csrf/i, "권한 또는 세션 보안 토큰을 확인하지 못했습니다. 페이지를 새로고침해 주세요."],
     [/storage failure|internal error/i, "저장소 오류가 발생했습니다. 잠시 후 다시 시도하세요."],
     [/network|failed to fetch|load failed/i, "서버에 연결하지 못했습니다."],
   ];
@@ -678,7 +728,7 @@ async function submitAction(action, { reset = false } = {}) {
       showAuth(true);
       return null;
     }
-    if (error.status === 400 || error.status === 413) {
+    if (error.status === 400 || error.status === 403 || error.status === 413) {
       toast(localizeError(error.message), { error: true });
       return null;
     }
@@ -870,6 +920,7 @@ function init() {
   bindAdminShell();
   selectTab(game.tab);
   renderLog();
+  ensureCsrf();
   load({ initial: true });
   window.setInterval(() => {
     if (document.hidden || game.pending || game.authError) return;

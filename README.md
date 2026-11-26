@@ -43,7 +43,7 @@ art/                # 웹 루트 밖 아트 원본(source)·반입 대기(export
 docs/               # GAME_DESIGN, ECONOMY_SPEC, ANIMATION_SPEC, ART_DIRECTION, ASSET_REQUIREMENTS, DB_MIGRATION, PHASE2_*, PERFORMANCE_REPORT, notes
 tools/              # qa_perf.py(부하·soak), build_sprite_atlases.py(384 서비스 export),
                     # import_phase22_atlas.py(납품 반입 게이트), wo0221_*(에셋 감사·GIF·브라우저 QA)
-tests/              # 215개 단위·통합 테스트 (UDS·릴리스 게이트·에셋 감사 포함)
+tests/              # 222개 단위·통합 테스트 (UDS·릴리스 게이트·에셋 감사 포함)
 ```
 
 ## 로컬 실행
@@ -95,7 +95,7 @@ Hard Reset 권한은 Server-HQ admin-auth의 실제 계정 체계를 따릅니�
 ## 테스트
 
 ```bash
-python3 -m unittest discover -s tests -t . -v   # 215 tests (실제 UDS 4건 포함)
+python3 -m unittest discover -s tests -t . -v   # 222 tests (실제 UDS 4건 포함)
 
 # 부하·soak (실행 중인 서버 대상, 프록시 우회 내장)
 python3 tools/qa_perf.py public --base http://127.0.0.1:8123 --viewers 100 --seconds 30 --interval 1

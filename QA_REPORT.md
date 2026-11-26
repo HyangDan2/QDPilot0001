@@ -16,7 +16,7 @@
 | WO-02 런타임 최적화 | 서비스 아틀라스 384 셀 6종, 상태당 289,886~862,325 B(전부 1 MiB 이하), 디코드 148.2 → 40.2 MiB |
 | WO-03 무결성 검증 | `tools/wo0221_asset_audit.py` — 문제 0건, 경고 11건(모두 기존 아트의 셀 여백), Attack index 6 타격 자세 5개 조건 충족 |
 | WO-04 실 화면 QA | GIF·프레임시트 6종, PC 1440 / 모바일 390 스크린샷, FPS·전송량·메모리 비교, 로딩 실패 fallback 확인 |
-| WO-05 회귀 | Python 215건 중 207 통과(8건은 base 커밋에서도 동일하게 실패하는 환경 제약), JS 23/23 |
+| WO-05 회귀 | Python 222건 중 214 통과(8건은 base 커밋에서도 동일하게 실패하는 환경 제약), JS 23/23 |
 | WO-06 형상관리 | 반입 게이트 통합·핸드오프 문서 정합화·프레임/프롬프트 백업·커밋 6건·PR #1 본문/제목 갱신 |
 
 ## 1. 범위와 제약 준수
@@ -196,7 +196,7 @@ Run 아틀라스 요청을 404로 차단한 상태로 앱을 띄운 결과:
 | 스위트 | 결과 |
 | --- | --- |
 | `node --test tests/js/sprite_manifest.test.mjs tests/js/op_coordinator.test.mjs` | **23/23 통과** (기존 22 + 신규 1) |
-| `python3 -m unittest discover -s tests -t .` | **215건 중 207 통과, 8 실패** |
+| `python3 -m unittest discover -s tests -t .` | **222건 중 214 통과, 8 실패** |
 
 8건의 실패는 전부 readiness/디스크 검사 테스트이며 **이번 변경과 무관한 환경 제약**입니다:
 이 컨테이너의 `/tmp`는 128 MiB tmpfs인데 `server/store.py`의 `MIN_FREE_BYTES`가 256 MiB라

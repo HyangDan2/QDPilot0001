@@ -194,8 +194,8 @@ class StorageGate(GateTestCase):
 
 class AssetGate(unittest.TestCase):
     # Stage 1 (v3 art) delivers the Idle 4x2 atlas, Stage 2 the Run 4x3 atlas,
-    # Stage 3 the Attack 4x3 atlas; every other state is still served by its
-    # single-image fallback until its own stage ships.
+    # Stage 3 the Attack 4x3 atlas and Stage 4 the Repair 4x2 atlas; every other
+    # state is still served by its single-image fallback until its own stage ships.
     DELIVERED_SOURCES = {
         "idle": {"type": "atlas", "file": "hyangdani-idle-v3-4x2.png",
                  "columns": 4, "rows": 2, "width": 3072, "height": 1536},
@@ -203,7 +203,10 @@ class AssetGate(unittest.TestCase):
                 "columns": 4, "rows": 3, "width": 3072, "height": 2304},
         "attack": {"type": "atlas", "file": "hyangdani-attack-v3-4x3.png",
                    "columns": 4, "rows": 3, "width": 3072, "height": 2304},
+        "repair": {"type": "atlas", "file": "hyangdani-repair-v3-4x2.png",
+                   "columns": 4, "rows": 2, "width": 3072, "height": 1536},
     }
+    PENDING_STATES = ("levelup", "install")
 
     def test_reg_15_manifest_is_v3_right_facing_with_attack_hit(self):
         manifest = json.loads(
@@ -218,6 +221,12 @@ class AssetGate(unittest.TestCase):
             else:
                 self.assertIsNone(state["source"], f"{name} has no final art yet")
             self.assertEqual(state["fallback"]["facing"], "right")
+        # Stage 4 delivered repair; levelup and install still ride the fallback.
+        self.assertEqual(manifest["states"]["repair"]["loop"], True)
+        self.assertEqual(manifest["states"]["repair"]["fps"], 10)
+        self.assertEqual(manifest["states"]["repair"]["seconds"], 0.8)
+        for name in self.PENDING_STATES:
+            self.assertIsNone(manifest["states"][name]["source"], name)
 
     def test_reg_15b_delivered_atlas_matches_manifest_geometry(self):
         manifest = json.loads(

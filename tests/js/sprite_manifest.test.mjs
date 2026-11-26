@@ -44,13 +44,34 @@ test("shipped manifest is manifest v3 with right-facing hero art", async () => {
   }
   assert.equal(frames, 64);
   assert.deepEqual(manifest.states.attack.hits, [{ frame: 6, type: "strike" }]);
-  const attackSource = manifest.states.attack.source;
-  assert.equal(attackSource.type, "atlas");
-  assert.equal(attackSource.file, "hyangdani-attack-v3-4x3.png");
-  assert.equal(attackSource.columns, 4);
-  assert.equal(attackSource.rows, 3);
-  assert.equal(attackSource.width, 3072);
-  assert.equal(attackSource.height, 2304);
+  // Delivered v3 atlases: Stages 1-4 (idle, run, attack, repair).
+  const atlases = {
+    idle: { file: "hyangdani-idle-v3-4x2.png", columns: 4, rows: 2, width: 3072, height: 1536 },
+    run: { file: "hyangdani-run-v3-4x3.png", columns: 4, rows: 3, width: 3072, height: 2304 },
+    attack: { file: "hyangdani-attack-v3-4x3.png", columns: 4, rows: 3, width: 3072, height: 2304 },
+    repair: { file: "hyangdani-repair-v3-4x2.png", columns: 4, rows: 2, width: 3072, height: 1536 },
+  };
+  for (const [state, expectedSource] of Object.entries(atlases)) {
+    const entry = manifest.states[state];
+    assert.equal(entry.source.type, "atlas", `${state} source type`);
+    assert.equal(entry.source.file, expectedSource.file, `${state} file`);
+    assert.equal(entry.source.columns, expectedSource.columns, `${state} columns`);
+    assert.equal(entry.source.rows, expectedSource.rows, `${state} rows`);
+    assert.equal(entry.source.width, expectedSource.width, `${state} width`);
+    assert.equal(entry.source.height, expectedSource.height, `${state} height`);
+    assert.equal(entry.source.columns * entry.source.rows, entry.frames, `${state} cell count`);
+    assert.equal(entry.source.width / entry.source.columns, 768, `${state} cell width`);
+    assert.equal(entry.source.height / entry.source.rows, 768, `${state} cell height`);
+  }
+  // Stage 4 delivered repair (8F, 10 fps, 0.8 s, looping); levelup and install
+  // still have no final art and must fall back.
+  assert.equal(manifest.states.repair.loop, true);
+  assert.equal(manifest.states.repair.fps, 10);
+  assert.equal(manifest.states.repair.frames, 8);
+  for (const pending of ["levelup", "install"]) {
+    assert.equal(manifest.states[pending].source, null, `${pending} is not delivered yet`);
+    assert.ok(manifest.states[pending].fallback.file.endsWith(".png"), `${pending} keeps a fallback`);
+  }
   assert.equal(manifest.bugs.alive.facing, "left");
   assert.equal(manifest.bugs.hit.facing, "left");
 });

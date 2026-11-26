@@ -44,7 +44,13 @@ test("shipped manifest is manifest v3 with right-facing hero art", async () => {
   }
   assert.equal(frames, 64);
   assert.deepEqual(manifest.states.attack.hits, [{ frame: 6, type: "strike" }]);
-  assert.equal(manifest.states.attack.source, null, "no final art has been delivered yet");
+  const attackSource = manifest.states.attack.source;
+  assert.equal(attackSource.type, "atlas");
+  assert.equal(attackSource.file, "hyangdani-attack-v3-4x3.png");
+  assert.equal(attackSource.columns, 4);
+  assert.equal(attackSource.rows, 3);
+  assert.equal(attackSource.width, 3072);
+  assert.equal(attackSource.height, 2304);
   assert.equal(manifest.bugs.alive.facing, "left");
   assert.equal(manifest.bugs.hit.facing, "left");
 });

@@ -20,7 +20,7 @@
     "attack": {
       "frames": 12, "fps": 16, "loop": false, "seconds": 0.75, "facing": "right",
       "hits": [{ "frame": 6, "type": "strike" }],
-      "source": null,
+      "source": { "type": "atlas", "file": "hyangdani-attack-v3-4x3.png", "columns": 4, "rows": 3, "width": 3072, "height": 2304 },
       "fallback": { "file": "hyangdani-strike.png", "facing": "right" }
     },
     "repair": {

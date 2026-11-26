@@ -37,6 +37,26 @@ levelup·install 12/12=1.0). **manifest v3가 상태별 `seconds`/`durations`/`f
 선언하면 로드 후 `Animator`가 그 값을 우선 사용**합니다(현행 manifest는 위 표와 동일).
 `MOTION.attackSeconds`·`MOTION.repairSeconds`는 manifest를 읽기 전의 기본값입니다.
 
+### 2.1 Run 12F 위상 (Phase 2.2.1 교정본)
+
+12프레임을 좌·우 두 걸음(각 6프레임)으로 나눈 표준 달리기 사이클입니다. 무게 이동은
+포즈가 만들고(지지 다리가 굽으면 골반이 내려감), 착지 프레임만 발바닥을 바닥선에
+붙이며 공중·도달 프레임은 바닥선에서 띄웁니다.
+
+| 프레임 | 위상 | 접지 | 비고 |
+| --- | --- | --- | --- |
+| 0 | contact (오른발 착지) | 바닥 (sole=하단선) | 앞다리 거의 편 자세, 머리카락이 위로 튐 |
+| 1 | down (충격 흡수) | 바닥 | 골반 최저, 머리카락이 들려 늘어짐(관성) |
+| 2 | passing | 바닥 | 반대 무릎이 앞으로 통과 |
+| 3 | push-off | 발끝만 (2px) | 뒷다리 완전 신전, 상체 최고 |
+| 4 | airborne | 22px 띄움 | 두 발 공중, 다리 교차 |
+| 5 | reach | 8px 띄움 | 다음 착지를 향해 앞발 뻗기 |
+| 6–11 | 위 6위상을 왼발로 반복 | 동일 | 두 번째 걸음(복제가 아님) |
+
+`tools/wo0221_asset_audit.py`가 프레임마다 접지선·띄움 프레임·루프 유사도(IoU)를
+측정하고, `tests/test_sprite_assets.py`가 12장 중복 없음·좌우 걸음 분리·공중
+프레임 2~4개·루프 이음매가 사이클 최악값보다 나쁘지 않음을 검증합니다.
+
 ## 3. 행동 상태 머신
 
 ```text
@@ -96,6 +116,11 @@ reboot / reset    : 버그 제거, 이펙트 비움, idle로 복귀
   `flipFor(facing, dir)`가 **바라보는 방향과 이동 방향이 다를 때만** 좌우 반전합니다.
 - 앵커는 상태 공통 `anchor`(기본 `[0.5, 1.0]`, 발끝) 또는 프레임별 `anchors[n]`을
   씁니다. 화면상 높이는 `clamp(min(화면 높이×0.31, 화면 폭×0.6), 150, 300)` px입니다.
+- **해상도 2단(Phase 2.2.1)**: 제작 캔버스는 768×768 셀이며, 브라우저가 받는 서비스
+  아틀라스는 384×384 셀입니다(`manifest.cell` = 서비스, `manifest.authoring.cell` = 제작,
+  상태별 `authoring`에 원본 경로·크기). 엔진은 선언된 `columns`/`rows`와 실제 이미지
+  크기로 슬라이스하므로 해상도를 하드코딩하지 않습니다. 제작 원본을 그대로 넣어도
+  같은 규격으로 그려집니다.
 
 ## 6. 이펙트 상한
 
@@ -130,6 +155,11 @@ reboot / reset    : 버그 제거, 이펙트 비움, idle로 복귀
   시점부터 4.21MB였습니다. FPS는 부팅 직후 55 → 15초 후 60으로 측정됐습니다.
   픽셀 합계 기반 추정치이며 JS heap 실측·Raspberry Pi 실측은 WO-10에서 별도로
   보고합니다.
+- **Phase 2.2.1 서비스 해상도(2026-11-26, 헤드리스 Chromium 156, 1440×900 및
+  390×844 DPR 3)**: 6개 상태를 모두 디코드한 합계가 384 셀 서비스 아틀라스에서
+  **40.21 MiB**, 768 셀 제작 원본에서 **148.21 MiB**(3.7배)였고, 전송량은
+  **4,066 KiB vs 22,504 KiB**(5.5배)였습니다. 측정 조건과 원본 JSON은
+  [`QA_REPORT.md`](../QA_REPORT.md)·`docs/screenshots/wo0221/browser-qa.json`에 있습니다.
 
 ## 8. 검증 훅
 
@@ -149,17 +179,18 @@ reboot / reset    : 버그 제거, 이펙트 비움, idle로 복귀
 
 ## 9. 아트 매핑
 
-| 상태 | manifest 키 | 납품 파일(안, v3) | 현재 fallback |
-| --- | --- | --- | --- |
-| idle | `states.idle` | `hyangdani-idle-4x2.png`(8F 아틀라스) 또는 `hyangdani-idle-0..7.png` | `hyangdani-idle.png` |
-| run | `states.run` | `hyangdani-run-4x3.png`(12F 아틀라스) 또는 `hyangdani-run-0..11.png` | `hyangdani-run.png` |
-| attack | `states.attack` | `hyangdani-attack-4x3.png` + manifest `hits` | `hyangdani-strike.png` |
-| repair | `states.repair` | `hyangdani-repair-4x2.png` | `hyangdani-idle.png` |
-| levelup | `states.levelup` | `hyangdani-levelup-4x3.png` | `hyangdani-idle.png` |
-| install | `states.install` | `hyangdani-install-4x3.png` | `hyangdani-idle.png` |
-| 버그 | `bugs` | `bug-alive.png`, `bug-hit.png`(v3에서 facing 명시) | 좌동 |
+| 상태 | manifest 키 | 납품 파일(현행, 384 서비스) | 제작 원본(768) | 현재 fallback |
+| --- | --- | --- | --- | --- |
+| idle | `states.idle` | `hyangdani-idle-v31-4x2.png`(8F) | `hyangdani-idle-v3-4x2.png` | `hyangdani-idle.png` |
+| run | `states.run` | `hyangdani-run-v31-4x3.png`(12F) | `art/hyangdani/export/run-v31/hyangdani-run-v31-4x3-768.png` | `hyangdani-run.png` |
+| attack | `states.attack` | `hyangdani-attack-v31-4x3.png`(12F) + manifest `hits` | `hyangdani-attack-v3-4x3.png` | `hyangdani-strike.png` |
+| repair | `states.repair` | `hyangdani-repair-v31-4x2.png`(8F) | `hyangdani-repair-v3-4x2.png` | `hyangdani-idle.png` |
+| levelup | `states.levelup` | `hyangdani-levelup-v31-4x3.png`(12F) | `hyangdani-levelup-v3-4x3.png` | `hyangdani-idle.png` |
+| install | `states.install` | `hyangdani-install-v31-4x3.png`(12F) | `hyangdani-install-v3-4x3.png` | `hyangdani-idle.png` |
+| 버그 | `bugs` | `bug-alive.png`, `bug-hit.png`(facing 명시) | 좌동 | 좌동 |
 
 아틀라스 파일명·배치는 [`ASSET_REQUIREMENTS_V3.md`](ASSET_REQUIREMENTS_V3.md) 4장을 따릅니다.
-현행 manifest는 모든 `source`가 `null`이며 fallback으로 동작합니다. 회귀 테스트용 번호 타일
-아틀라스(`test-idle-4x2.png`, `test-run-4x3.png`)는 `tests/fixtures/sprites/`에만 있고 배포
-트리에는 포함되지 않습니다.
+현행 manifest는 6개 상태 모두 아틀라스 `source`를 가지며(Phase 2.2.1), fallback은
+로드 실패 시에만 쓰입니다. v3(768 셀) 아틀라스 6장은 삭제하지 않고 저장소에 남아
+있습니다. 회귀 테스트용 번호 타일 아틀라스(`test-idle-4x2.png`, `test-run-4x3.png`)는
+`tests/fixtures/sprites/`에만 있고 배포 트리에는 포함되지 않습니다.

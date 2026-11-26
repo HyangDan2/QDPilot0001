@@ -12,6 +12,7 @@
         "frame 3 comes within 2 px of the cell border"
       ],
       "bytes": 862325,
+      "budget_applies": true,
       "mode": "RGBA",
       "size": [
         1536,
@@ -232,6 +233,7 @@
         "frame 4 comes within 4 px of the cell border"
       ],
       "bytes": 338199,
+      "budget_applies": true,
       "mode": "P",
       "size": [
         1536,
@@ -543,6 +545,7 @@
         "horizontal ground point is -101 px off the anchor"
       ],
       "bytes": 354911,
+      "budget_applies": true,
       "mode": "P",
       "size": [
         1536,
@@ -937,6 +940,7 @@
       "problems": [],
       "warnings": [],
       "bytes": 727177,
+      "budget_applies": true,
       "mode": "RGBA",
       "size": [
         1536,
@@ -1156,6 +1160,7 @@
         "frame 4 comes within 4 px of the cell border"
       ],
       "bytes": 289886,
+      "budget_applies": true,
       "mode": "P",
       "size": [
         1536,
@@ -1457,6 +1462,7 @@
       "problems": [],
       "warnings": [],
       "bytes": 293764,
+      "budget_applies": true,
       "mode": "P",
       "size": [
         1536,

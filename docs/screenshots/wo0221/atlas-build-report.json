@@ -15,7 +15,9 @@
     "rows": 2,
     "bytes": 862325,
     "encoding": "png32",
-    "committed_bytes": 862325
+    "committed_bytes": 862325,
+    "psnr_vs_rebuilt": 100.0,
+    "ok": true
   },
   {
     "state": "run",
@@ -33,7 +35,9 @@
     "rows": 3,
     "bytes": 338199,
     "encoding": "png8-256",
-    "committed_bytes": 338199
+    "committed_bytes": 338199,
+    "psnr_vs_rebuilt": 36.22,
+    "ok": true
   },
   {
     "state": "attack",
@@ -51,7 +55,9 @@
     "rows": 3,
     "bytes": 354911,
     "encoding": "png8-256",
-    "committed_bytes": 354911
+    "committed_bytes": 354911,
+    "psnr_vs_rebuilt": 36.73,
+    "ok": true
   },
   {
     "state": "repair",
@@ -69,7 +75,9 @@
     "rows": 2,
     "bytes": 727177,
     "encoding": "png32",
-    "committed_bytes": 727177
+    "committed_bytes": 727177,
+    "psnr_vs_rebuilt": 100.0,
+    "ok": true
   },
   {
     "state": "levelup",
@@ -87,7 +95,9 @@
     "rows": 3,
     "bytes": 289886,
     "encoding": "png8-256",
-    "committed_bytes": 289886
+    "committed_bytes": 289886,
+    "psnr_vs_rebuilt": 37.77,
+    "ok": true
   },
   {
     "state": "install",
@@ -105,6 +115,8 @@
     "rows": 3,
     "bytes": 293764,
     "encoding": "png8-256",
-    "committed_bytes": 293764
+    "committed_bytes": 293764,
+    "psnr_vs_rebuilt": 37.21,
+    "ok": true
   }
 ]

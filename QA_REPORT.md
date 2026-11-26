@@ -240,7 +240,8 @@ Run 아틀라스 요청을 404로 차단한 상태로 앱을 띄운 결과:
 | `11e29d4` | WO-06 반입 게이트·픽스처 테스트·핸드오프 문서 |
 | `af0c15c` | docs 갱신 + 이 `QA_REPORT.md` |
 | `ed1e0e7` | `--check` 재실행으로 갱신된 아틀라스 빌드·감사 리포트 |
-| (이 정정 커밋) | 원격 SHA·커밋 목록 기재 |
+| `7a47113` | 원격 SHA·커밋 목록 기재 |
+| `e8c9566` | 감사 도구 `--json` 절대경로 버그 수정, 테스트가 종료코드까지 검사 |
 
 - 푸시: `d60337f..ed1e0e7 feature/v3-hyangdani-assets -> feature/v3-hyangdani-assets`.
 - 원격 검증: `git rev-parse HEAD` == `git rev-parse origin/feature/v3-hyangdani-assets`

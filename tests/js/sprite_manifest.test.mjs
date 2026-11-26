@@ -44,12 +44,13 @@ test("shipped manifest is manifest v3 with right-facing hero art", async () => {
   }
   assert.equal(frames, 64);
   assert.deepEqual(manifest.states.attack.hits, [{ frame: 6, type: "strike" }]);
-  // Delivered v3 atlases: Stages 1-4 (idle, run, attack, repair).
+  // Delivered v3 atlases: Stages 1-5 (idle, run, attack, repair, levelup).
   const atlases = {
     idle: { file: "hyangdani-idle-v3-4x2.png", columns: 4, rows: 2, width: 3072, height: 1536 },
     run: { file: "hyangdani-run-v3-4x3.png", columns: 4, rows: 3, width: 3072, height: 2304 },
     attack: { file: "hyangdani-attack-v3-4x3.png", columns: 4, rows: 3, width: 3072, height: 2304 },
     repair: { file: "hyangdani-repair-v3-4x2.png", columns: 4, rows: 2, width: 3072, height: 1536 },
+    levelup: { file: "hyangdani-levelup-v3-4x3.png", columns: 4, rows: 3, width: 3072, height: 2304 },
   };
   for (const [state, expectedSource] of Object.entries(atlases)) {
     const entry = manifest.states[state];
@@ -63,12 +64,16 @@ test("shipped manifest is manifest v3 with right-facing hero art", async () => {
     assert.equal(entry.source.width / entry.source.columns, 768, `${state} cell width`);
     assert.equal(entry.source.height / entry.source.rows, 768, `${state} cell height`);
   }
-  // Stage 4 delivered repair (8F, 10 fps, 0.8 s, looping); levelup and install
-  // still have no final art and must fall back.
+  // Stage 4 delivered repair (8F, 10 fps, 0.8 s, looping) and Stage 5 delivered
+  // levelup (12F, 12 fps, 1.0 s, one-shot); install still has no final art and
+  // must fall back.
   assert.equal(manifest.states.repair.loop, true);
   assert.equal(manifest.states.repair.fps, 10);
   assert.equal(manifest.states.repair.frames, 8);
-  for (const pending of ["levelup", "install"]) {
+  assert.equal(manifest.states.levelup.loop, false);
+  assert.equal(manifest.states.levelup.fps, 12);
+  assert.equal(manifest.states.levelup.frames, 12);
+  for (const pending of ["install"]) {
     assert.equal(manifest.states[pending].source, null, `${pending} is not delivered yet`);
     assert.ok(manifest.states[pending].fallback.file.endsWith(".png"), `${pending} keeps a fallback`);
   }

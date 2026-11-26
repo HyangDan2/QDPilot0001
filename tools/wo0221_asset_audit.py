@@ -292,7 +292,9 @@ def main() -> int:
               f"{row.get('sole_y', {}).get('min', 0):>3d}-{row.get('sole_y', {}).get('max', 0):<4d} "
               f"{row.get('loop_iou', 0):>8}")
 
-    out = ROOT / args.json
+    out = Path(args.json)
+    if not out.is_absolute():
+        out = ROOT / out
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"scope": "authoring" if args.authoring else "service",
                                "problems": problems, "warnings": warnings,
@@ -310,7 +312,8 @@ def main() -> int:
         print(f"  attack hammer at hit: cx={attack['attack_hit_frame_detail']['hammer_cx']} "
               f"cy={attack['attack_hit_frame_detail']['hammer_cy']} "
               f"(cycle cy {attack['attack_hit_frame_detail']['cycle_cy_range']})")
-    print(f"report: {out.relative_to(ROOT)}  problems={problems} warnings={warnings}")
+    shown = out.relative_to(ROOT) if ROOT in out.parents else out
+    print(f"report: {shown}  problems={problems} warnings={warnings}")
     return 1 if problems or (args.strict and warnings) else 0
 
 

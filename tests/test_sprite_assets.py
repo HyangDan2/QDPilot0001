@@ -172,6 +172,7 @@ class SpriteAssetTests(unittest.TestCase):
                 [sys.executable, str(ROOT / "tools/wo0221_asset_audit.py"), "--json", str(report)],
                 cwd=ROOT, capture_output=True, text=True, timeout=300,
             )
+            self.assertEqual(result.returncode, 0, result.stdout[-2000:] + result.stderr[-2000:])
             data = json.loads(report.read_text(encoding="utf-8"))
             self.assertEqual(data["problems"], 0, result.stdout[-2000:])
             by_state = {row["state"]: row for row in data["states"]}

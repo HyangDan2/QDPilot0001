@@ -4,38 +4,48 @@
   "anchor": [0.5, 1.0],
   "facing": "right",
   "maxTexture": 4096,
-  "cell": [768, 768],
-  "naming": "hyangdani-{state}.png",
+  "cell": [384, 384],
+  "authoring": {
+    "cell": [768, 768],
+    "note": "Production canvases are 768x768 per frame. They are kept as masters (art/ for new art, the v3 files in this directory for the atlases delivered before Phase 2.2.1) and are never requested by the browser; sources below are the 384 service exports."
+  },
+  "naming": "hyangdani-{state}-v31-{cols}x{rows}.png",
   "states": {
     "idle": {
       "frames": 8, "fps": 8, "loop": true, "seconds": 1.0, "facing": "right",
-      "source": { "type": "atlas", "file": "hyangdani-idle-v3-4x2.png", "columns": 4, "rows": 2, "width": 3072, "height": 1536 },
+      "authoring": { "file": "static/public/assets/sprites/hyangdani-idle-v3-4x2.png", "width": 3072, "height": 1536 },
+      "source": { "type": "atlas", "file": "hyangdani-idle-v31-4x2.png", "columns": 4, "rows": 2, "width": 1536, "height": 768 },
       "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
     },
     "run": {
       "frames": 12, "fps": 12, "loop": true, "seconds": 1.0, "facing": "right",
-      "source": { "type": "atlas", "file": "hyangdani-run-v3-4x3.png", "columns": 4, "rows": 3, "width": 3072, "height": 2304 },
+      "authoring": { "file": "art/hyangdani/export/run-v31/hyangdani-run-v31-4x3-768.png", "width": 3072, "height": 2304 },
+      "source": { "type": "atlas", "file": "hyangdani-run-v31-4x3.png", "columns": 4, "rows": 3, "width": 1536, "height": 1152 },
       "fallback": { "file": "hyangdani-run.png", "facing": "right" }
     },
     "attack": {
       "frames": 12, "fps": 16, "loop": false, "seconds": 0.75, "facing": "right",
       "hits": [{ "frame": 6, "type": "strike" }],
-      "source": { "type": "atlas", "file": "hyangdani-attack-v3-4x3.png", "columns": 4, "rows": 3, "width": 3072, "height": 2304 },
+      "authoring": { "file": "static/public/assets/sprites/hyangdani-attack-v3-4x3.png", "width": 3072, "height": 2304 },
+      "source": { "type": "atlas", "file": "hyangdani-attack-v31-4x3.png", "columns": 4, "rows": 3, "width": 1536, "height": 1152 },
       "fallback": { "file": "hyangdani-strike.png", "facing": "right" }
     },
     "repair": {
       "frames": 8, "fps": 10, "loop": true, "seconds": 0.8, "facing": "right",
-      "source": { "type": "atlas", "file": "hyangdani-repair-v3-4x2.png", "columns": 4, "rows": 2, "width": 3072, "height": 1536 },
+      "authoring": { "file": "static/public/assets/sprites/hyangdani-repair-v3-4x2.png", "width": 3072, "height": 1536 },
+      "source": { "type": "atlas", "file": "hyangdani-repair-v31-4x2.png", "columns": 4, "rows": 2, "width": 1536, "height": 768 },
       "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
     },
     "levelup": {
       "frames": 12, "fps": 12, "loop": false, "seconds": 1.0, "facing": "right",
-      "source": { "type": "atlas", "file": "hyangdani-levelup-v3-4x3.png", "columns": 4, "rows": 3, "width": 3072, "height": 2304 },
+      "authoring": { "file": "static/public/assets/sprites/hyangdani-levelup-v3-4x3.png", "width": 3072, "height": 2304 },
+      "source": { "type": "atlas", "file": "hyangdani-levelup-v31-4x3.png", "columns": 4, "rows": 3, "width": 1536, "height": 1152 },
       "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
     },
     "install": {
       "frames": 12, "fps": 12, "loop": false, "seconds": 1.0, "facing": "right",
-      "source": { "type": "atlas", "file": "hyangdani-install-v3-4x3.png", "columns": 4, "rows": 3, "width": 3072, "height": 2304 },
+      "authoring": { "file": "static/public/assets/sprites/hyangdani-install-v3-4x3.png", "width": 3072, "height": 2304 },
+      "source": { "type": "atlas", "file": "hyangdani-install-v31-4x3.png", "columns": 4, "rows": 3, "width": 1536, "height": 1152 },
       "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
     }
   },

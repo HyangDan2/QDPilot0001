@@ -4,7 +4,9 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import {
   DEFAULT_MANIFEST,
   LOAD_RETRY_MS,
@@ -44,14 +46,18 @@ test("shipped manifest is manifest v3 with right-facing hero art", async () => {
   }
   assert.equal(frames, 64);
   assert.deepEqual(manifest.states.attack.hits, [{ frame: 6, type: "strike" }]);
-  // Delivered v3 atlases: all six states (Stages 1-6).
+  // Phase 2.2.1 (WO-01/WO-02): every state ships a 384 px-cell service atlas
+  // built from a preserved 768 px-cell authoring master. The manifest is the
+  // single source of truth for both resolutions.
+  assert.deepEqual(manifest.cell, [384, 384], "service cell");
+  assert.deepEqual(raw.authoring.cell, [768, 768], "authoring cell");
   const atlases = {
-    idle: { file: "hyangdani-idle-v3-4x2.png", columns: 4, rows: 2, width: 3072, height: 1536 },
-    run: { file: "hyangdani-run-v3-4x3.png", columns: 4, rows: 3, width: 3072, height: 2304 },
-    attack: { file: "hyangdani-attack-v3-4x3.png", columns: 4, rows: 3, width: 3072, height: 2304 },
-    repair: { file: "hyangdani-repair-v3-4x2.png", columns: 4, rows: 2, width: 3072, height: 1536 },
-    levelup: { file: "hyangdani-levelup-v3-4x3.png", columns: 4, rows: 3, width: 3072, height: 2304 },
-    install: { file: "hyangdani-install-v3-4x3.png", columns: 4, rows: 3, width: 3072, height: 2304 },
+    idle: { file: "hyangdani-idle-v31-4x2.png", authoring: "static/public/assets/sprites/hyangdani-idle-v3-4x2.png", columns: 4, rows: 2 },
+    run: { file: "hyangdani-run-v31-4x3.png", authoring: "art/hyangdani/export/run-v31/hyangdani-run-v31-4x3-768.png", columns: 4, rows: 3 },
+    attack: { file: "hyangdani-attack-v31-4x3.png", authoring: "static/public/assets/sprites/hyangdani-attack-v3-4x3.png", columns: 4, rows: 3 },
+    repair: { file: "hyangdani-repair-v31-4x2.png", authoring: "static/public/assets/sprites/hyangdani-repair-v3-4x2.png", columns: 4, rows: 2 },
+    levelup: { file: "hyangdani-levelup-v31-4x3.png", authoring: "static/public/assets/sprites/hyangdani-levelup-v3-4x3.png", columns: 4, rows: 3 },
+    install: { file: "hyangdani-install-v31-4x3.png", authoring: "static/public/assets/sprites/hyangdani-install-v3-4x3.png", columns: 4, rows: 3 },
   };
   for (const [state, expectedSource] of Object.entries(atlases)) {
     const entry = manifest.states[state];
@@ -59,11 +65,19 @@ test("shipped manifest is manifest v3 with right-facing hero art", async () => {
     assert.equal(entry.source.file, expectedSource.file, `${state} file`);
     assert.equal(entry.source.columns, expectedSource.columns, `${state} columns`);
     assert.equal(entry.source.rows, expectedSource.rows, `${state} rows`);
-    assert.equal(entry.source.width, expectedSource.width, `${state} width`);
-    assert.equal(entry.source.height, expectedSource.height, `${state} height`);
+    assert.equal(entry.source.width, expectedSource.columns * 384, `${state} width`);
+    assert.equal(entry.source.height, expectedSource.rows * 384, `${state} height`);
     assert.equal(entry.source.columns * entry.source.rows, entry.frames, `${state} cell count`);
-    assert.equal(entry.source.width / entry.source.columns, 768, `${state} cell width`);
-    assert.equal(entry.source.height / entry.source.rows, 768, `${state} cell height`);
+    assert.equal(entry.source.width / entry.source.columns, 384, `${state} service cell width`);
+    assert.equal(entry.source.height / entry.source.rows, 384, `${state} service cell height`);
+    // The authoring master is declared per state and is exactly twice the
+    // service resolution, so a test can tell the two apart without guessing.
+    const authoring = raw.states[state].authoring;
+    assert.equal(authoring.file, expectedSource.authoring, `${state} authoring file`);
+    assert.equal(authoring.width, expectedSource.columns * 768, `${state} authoring width`);
+    assert.equal(authoring.height, expectedSource.rows * 768, `${state} authoring height`);
+    assert.equal(authoring.width, entry.source.width * 2, `${state} authoring is 2x service`);
+    assert.equal(authoring.height, entry.source.height * 2, `${state} authoring is 2x service`);
   }
   // Stage 4 delivered repair (8F, 10 fps, 0.8 s, looping), Stage 5 levelup
   // (12F, 12 fps, 1.0 s, one-shot) and Stage 6 install (12F, 12 fps, 1.0 s,
@@ -80,9 +94,56 @@ test("shipped manifest is manifest v3 with right-facing hero art", async () => {
   for (const [state, entry] of Object.entries(manifest.states)) {
     assert.ok(entry.source && entry.source.type === "atlas", `${state} is a delivered atlas`);
     assert.ok(entry.fallback.file.endsWith(".png"), `${state} keeps a fallback`);
+    // No service source may point at an authoring master: the browser must never
+    // download a 768 px-cell file.
+    assert.ok(!raw.states[state].source.file.includes("-v3-"), `${state} does not serve the authoring file`);
   }
   assert.equal(manifest.bugs.alive.facing, "left");
   assert.equal(manifest.bugs.hit.facing, "left");
+});
+
+// WO-02: the manifest must describe the files that are actually on disk, and a
+// test must be able to tell the 768 px authoring master from the 384 px service
+// export without hard-coding either resolution outside the manifest.
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+
+async function pngSize(relative) {
+  const file = path.join(repoRoot, relative);
+  const bytes = await readFile(file);
+  assert.equal(bytes.subarray(1, 4).toString("latin1"), "PNG", `${relative} is a PNG`);
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20), bytes: bytes.length };
+}
+
+test("service atlases and authoring masters on disk match the manifest", async () => {
+  const raw = JSON.parse(await readFile(manifestUrl, "utf8"));
+  const serviceCell = raw.cell[0];
+  const authoringCell = raw.authoring.cell[0];
+  assert.equal(serviceCell, 384);
+  assert.equal(authoringCell, 768);
+  for (const [state, entry] of Object.entries(raw.states)) {
+    const service = await pngSize(`static/public/assets/sprites/${entry.source.file}`);
+    assert.equal(service.width, entry.source.width, `${state} service width on disk`);
+    assert.equal(service.height, entry.source.height, `${state} service height on disk`);
+    assert.equal(service.width, entry.source.columns * serviceCell, `${state} service cell`);
+    assert.equal(service.height, entry.source.rows * serviceCell, `${state} service cell`);
+    // WO-02 budget: a state's service atlas stays at or under 1 MiB.
+    assert.ok(service.bytes <= 1024 * 1024, `${state} service atlas is ${service.bytes} bytes (budget 1 MiB)`);
+    const master = await pngSize(entry.authoring.file);
+    assert.equal(master.width, entry.authoring.width, `${state} authoring width on disk`);
+    assert.equal(master.height, entry.authoring.height, `${state} authoring height on disk`);
+    assert.equal(master.width, entry.source.columns * authoringCell, `${state} authoring cell`);
+    assert.equal(master.height, entry.source.rows * authoringCell, `${state} authoring cell`);
+    assert.notEqual(entry.authoring.file, entry.source.file, `${state} keeps the master separate from the service file`);
+  }
+  // The five atlases delivered before Phase 2.2.1 are preserved untouched in
+  // the sprite directory even though the browser no longer requests them.
+  for (const legacy of [
+    "hyangdani-idle-v3-4x2.png", "hyangdani-run-v3-4x3.png", "hyangdani-attack-v3-4x3.png",
+    "hyangdani-repair-v3-4x2.png", "hyangdani-levelup-v3-4x3.png", "hyangdani-install-v3-4x3.png",
+  ]) {
+    const info = await stat(path.join(repoRoot, "static/public/assets/sprites", legacy));
+    assert.ok(info.size > 0, `${legacy} still exists`);
+  }
 });
 
 test("manifest v2 still loads: sheet string becomes a strip source", () => {

@@ -35,7 +35,7 @@
     },
     "install": {
       "frames": 12, "fps": 12, "loop": false, "seconds": 1.0, "facing": "right",
-      "source": null,
+      "source": { "type": "atlas", "file": "hyangdani-install-v3-4x3.png", "columns": 4, "rows": 3, "width": 3072, "height": 2304 },
       "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
     }
   },

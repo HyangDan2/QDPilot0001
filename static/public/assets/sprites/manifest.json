@@ -9,7 +9,7 @@
   "states": {
     "idle": {
       "frames": 8, "fps": 8, "loop": true, "seconds": 1.0, "facing": "right",
-      "source": null,
+      "source": { "type": "atlas", "file": "hyangdani-idle-v3-4x2.png", "columns": 4, "rows": 2, "width": 3072, "height": 1536 },
       "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
     },
     "run": {

@@ -193,6 +193,13 @@ class StorageGate(GateTestCase):
 
 
 class AssetGate(unittest.TestCase):
+    # Stage 1 (v3 art) delivers the Idle 4x2 atlas; every other state is still
+    # served by its single-image fallback until its own stage ships.
+    DELIVERED_SOURCES = {
+        "idle": {"type": "atlas", "file": "hyangdani-idle-v3-4x2.png",
+                 "columns": 4, "rows": 2, "width": 3072, "height": 1536},
+    }
+
     def test_reg_15_manifest_is_v3_right_facing_with_attack_hit(self):
         manifest = json.loads(
             (ROOT / "static/public/assets/sprites/manifest.json").read_text(encoding="utf-8")
@@ -200,9 +207,36 @@ class AssetGate(unittest.TestCase):
         self.assertEqual(manifest["version"], 3)
         self.assertEqual(manifest["facing"], "right")
         self.assertEqual(manifest["states"]["attack"]["hits"], [{"frame": 6, "type": "strike"}])
-        for state in manifest["states"].values():
-            self.assertIsNone(state["source"])
+        for name, state in manifest["states"].items():
+            if name in self.DELIVERED_SOURCES:
+                self.assertEqual(state["source"], self.DELIVERED_SOURCES[name], name)
+            else:
+                self.assertIsNone(state["source"], f"{name} has no final art yet")
             self.assertEqual(state["fallback"]["facing"], "right")
+
+    def test_reg_15b_delivered_atlas_matches_manifest_geometry(self):
+        manifest = json.loads(
+            (ROOT / "static/public/assets/sprites/manifest.json").read_text(encoding="utf-8")
+        )
+        sprites = ROOT / "static/public/assets/sprites"
+        for name, source in self.DELIVERED_SOURCES.items():
+            state = manifest["states"][name]
+            self.assertEqual(state["source"], source)
+            data = (sprites / source["file"]).read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n", name)
+            self.assertEqual(data[12:16], b"IHDR")
+            width = int.from_bytes(data[16:20], "big")
+            height = int.from_bytes(data[20:24], "big")
+            depth, colour = data[24], data[25]
+            self.assertEqual((width, height), (source["width"], source["height"]), name)
+            self.assertLessEqual(max(width, height), manifest["maxTexture"])
+            self.assertEqual((depth, colour), (8, 6), f"{name} must be PNG-32")
+            columns, rows = source["columns"], source["rows"]
+            self.assertEqual(columns * rows, state["frames"])
+            self.assertEqual(width // columns, 768)
+            self.assertEqual(height // rows, 768)
+            self.assertEqual(width % columns, 0)
+            self.assertEqual(height % rows, 0)
 
     def test_reg_16_fallback_assets_exist_and_are_png(self):
         sprites = ROOT / "static/public/assets/sprites"

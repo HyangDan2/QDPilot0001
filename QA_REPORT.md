@@ -17,7 +17,7 @@
 | WO-03 무결성 검증 | `tools/wo0221_asset_audit.py` — 문제 0건, 경고 11건(모두 기존 아트의 셀 여백), Attack index 6 타격 자세 5개 조건 충족 |
 | WO-04 실 화면 QA | GIF·프레임시트 6종, PC 1440 / 모바일 390 스크린샷, FPS·전송량·메모리 비교, 로딩 실패 fallback 확인 |
 | WO-05 회귀 | Python 215건 중 207 통과(8건은 base 커밋에서도 동일하게 실패하는 환경 제약), JS 23/23 |
-| WO-06 형상관리 | 반입 게이트 통합·핸드오프 문서 정합화·프레임/프롬프트 백업·커밋 5건·PR #1 갱신 |
+| WO-06 형상관리 | 반입 게이트 통합·핸드오프 문서 정합화·프레임/프롬프트 백업·커밋 6건·PR #1 본문/제목 갱신 |
 
 ## 1. 범위와 제약 준수
 
@@ -238,10 +238,15 @@ Run 아틀라스 요청을 404로 차단한 상태로 앱을 띄운 결과:
 | `b324344` | WO-02 384 서비스 아틀라스 6종·manifest·빌드 도구·테스트 재정의 |
 | `e605b39` | WO-03/04 감사·미리보기·브라우저 QA 도구와 증거 |
 | `11e29d4` | WO-06 반입 게이트·픽스처 테스트·핸드오프 문서 |
-| (이 보고서 커밋) | docs 갱신 + `QA_REPORT.md` |
+| `af0c15c` | docs 갱신 + 이 `QA_REPORT.md` |
+| `ed1e0e7` | `--check` 재실행으로 갱신된 아틀라스 빌드·감사 리포트 |
+| (이 정정 커밋) | 원격 SHA·커밋 목록 기재 |
 
+- 푸시: `d60337f..ed1e0e7 feature/v3-hyangdani-assets -> feature/v3-hyangdani-assets`.
 - 원격 검증: `git rev-parse HEAD` == `git rev-parse origin/feature/v3-hyangdani-assets`
-  (푸시 후 확인값은 인계 메시지에 기재).
+  (이 정정 커밋을 푸시한 뒤 재확인했고, 최종 SHA는 인계 메시지에 기재).
+- PR #1(`HyangDan2/QDPilot0001#1`, base `feature/phase2-core-evolution`)의 본문·제목을
+  Phase 2.2.1 결과로 갱신했습니다. 상태는 `OPEN` 유지이며 병합·배포는 하지 않았습니다.
 
 ## 8. 미결·권고
 

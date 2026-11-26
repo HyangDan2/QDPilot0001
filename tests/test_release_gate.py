@@ -193,11 +193,14 @@ class StorageGate(GateTestCase):
 
 
 class AssetGate(unittest.TestCase):
-    # Stage 1 (v3 art) delivers the Idle 4x2 atlas; every other state is still
-    # served by its single-image fallback until its own stage ships.
+    # Stage 1 (v3 art) delivers the Idle 4x2 atlas, Stage 2 the Run 4x3 atlas;
+    # every other state is still served by its single-image fallback until its
+    # own stage ships.
     DELIVERED_SOURCES = {
         "idle": {"type": "atlas", "file": "hyangdani-idle-v3-4x2.png",
                  "columns": 4, "rows": 2, "width": 3072, "height": 1536},
+        "run": {"type": "atlas", "file": "hyangdani-run-v3-4x3.png",
+                "columns": 4, "rows": 3, "width": 3072, "height": 2304},
     }
 
     def test_reg_15_manifest_is_v3_right_facing_with_attack_hit(self):

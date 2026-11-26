@@ -1,0 +1,110 @@
+[
+  {
+    "state": "idle",
+    "authoring": "static/public/assets/sprites/hyangdani-idle-v3-4x2.png",
+    "authoring_size": [
+      3072,
+      1536
+    ],
+    "service": "hyangdani-idle-v31-4x2.png",
+    "service_size": [
+      1536,
+      768
+    ],
+    "columns": 4,
+    "rows": 2,
+    "bytes": 862325,
+    "encoding": "png32",
+    "committed_bytes": 862325
+  },
+  {
+    "state": "run",
+    "authoring": "art/hyangdani/export/run-v31/hyangdani-run-v31-4x3-768.png",
+    "authoring_size": [
+      3072,
+      2304
+    ],
+    "service": "hyangdani-run-v31-4x3.png",
+    "service_size": [
+      1536,
+      1152
+    ],
+    "columns": 4,
+    "rows": 3,
+    "bytes": 338199,
+    "encoding": "png8-256",
+    "committed_bytes": 338199
+  },
+  {
+    "state": "attack",
+    "authoring": "static/public/assets/sprites/hyangdani-attack-v3-4x3.png",
+    "authoring_size": [
+      3072,
+      2304
+    ],
+    "service": "hyangdani-attack-v31-4x3.png",
+    "service_size": [
+      1536,
+      1152
+    ],
+    "columns": 4,
+    "rows": 3,
+    "bytes": 354911,
+    "encoding": "png8-256",
+    "committed_bytes": 354911
+  },
+  {
+    "state": "repair",
+    "authoring": "static/public/assets/sprites/hyangdani-repair-v3-4x2.png",
+    "authoring_size": [
+      3072,
+      1536
+    ],
+    "service": "hyangdani-repair-v31-4x2.png",
+    "service_size": [
+      1536,
+      768
+    ],
+    "columns": 4,
+    "rows": 2,
+    "bytes": 727177,
+    "encoding": "png32",
+    "committed_bytes": 727177
+  },
+  {
+    "state": "levelup",
+    "authoring": "static/public/assets/sprites/hyangdani-levelup-v3-4x3.png",
+    "authoring_size": [
+      3072,
+      2304
+    ],
+    "service": "hyangdani-levelup-v31-4x3.png",
+    "service_size": [
+      1536,
+      1152
+    ],
+    "columns": 4,
+    "rows": 3,
+    "bytes": 289886,
+    "encoding": "png8-256",
+    "committed_bytes": 289886
+  },
+  {
+    "state": "install",
+    "authoring": "static/public/assets/sprites/hyangdani-install-v3-4x3.png",
+    "authoring_size": [
+      3072,
+      2304
+    ],
+    "service": "hyangdani-install-v31-4x3.png",
+    "service_size": [
+      1536,
+      1152
+    ],
+    "columns": 4,
+    "rows": 3,
+    "bytes": 293764,
+    "encoding": "png8-256",
+    "committed_bytes": 293764
+  }
+]

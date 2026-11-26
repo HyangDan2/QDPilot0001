@@ -1,0 +1,50 @@
+[
+  {
+    "state": "idle",
+    "gif": "docs/screenshots/wo0221/previews/idle.gif",
+    "sheet": "docs/screenshots/wo0221/previews/idle-frames.png",
+    "gif_bytes": 228437,
+    "delay_ms": 125,
+    "frames": 8
+  },
+  {
+    "state": "run",
+    "gif": "docs/screenshots/wo0221/previews/run.gif",
+    "sheet": "docs/screenshots/wo0221/previews/run-frames.png",
+    "gif_bytes": 381871,
+    "delay_ms": 83,
+    "frames": 12
+  },
+  {
+    "state": "attack",
+    "gif": "docs/screenshots/wo0221/previews/attack.gif",
+    "sheet": "docs/screenshots/wo0221/previews/attack-frames.png",
+    "gif_bytes": 404025,
+    "delay_ms": 62,
+    "frames": 12
+  },
+  {
+    "state": "repair",
+    "gif": "docs/screenshots/wo0221/previews/repair.gif",
+    "sheet": "docs/screenshots/wo0221/previews/repair-frames.png",
+    "gif_bytes": 189844,
+    "delay_ms": 100,
+    "frames": 8
+  },
+  {
+    "state": "levelup",
+    "gif": "docs/screenshots/wo0221/previews/levelup.gif",
+    "sheet": "docs/screenshots/wo0221/previews/levelup-frames.png",
+    "gif_bytes": 332526,
+    "delay_ms": 83,
+    "frames": 12
+  },
+  {
+    "state": "install",
+    "gif": "docs/screenshots/wo0221/previews/install.gif",
+    "sheet": "docs/screenshots/wo0221/previews/install-frames.png",
+    "gif_bytes": 329873,
+    "delay_ms": 83,
+    "frames": 12
+  }
+]

@@ -324,6 +324,10 @@ def collect(twin_store, repo, client, now=None):
                     earned += 1
         if baseline is None:
             baseline = now
+        # A seeded branch tip is already known repository history, including
+        # when it is later pushed onto another branch with a future commit date.
+        con.executemany("INSERT OR IGNORE INTO twin_commits VALUES(?,?,0)",
+                        ((repo, head) for ref, head in refs.items() if ref not in previous))
         con.execute("""
             UPDATE twin_projects SET baseline_at=?, observed_at=?, xp=xp+?,run_commits=run_commits+?,
               commit_count=commit_count+?,served=?,retry_at=0

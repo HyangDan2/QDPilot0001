@@ -122,11 +122,17 @@ class TwinTest(unittest.TestCase):
         github.collect(self.service, 1, self.source, NOW)
         self.source.head = OTHER
         self.source.commits = [make_commit(OTHER, NOW + 2)]
+        self.assertEqual(github.collect(self.service, 1, self.source, NOW + 2)["xp"], 0)
+        self.source.head = "1" * 40
+        self.source.commits.append(make_commit(self.source.head, NOW + 3))
         self.assertEqual(github.collect(self.service, 1, self.source, NOW + 3)["xp"], 10)
+        config = {**self.projects[1], "refs": (*self.projects[1]["refs"], "new-branch")}
+        self.service = twin.Twin(self.store, {**self.projects, 1: config})
+        self.assertEqual(github.collect(self.service, 1, self.source, NOW + 3.5)["xp"], 0)
         self.source.error = github.Deferred(NOW + 100)
         with self.assertRaises(github.Deferred):
             github.collect(self.service, 1, self.source, NOW + 4)
-        self.assertEqual(self.row()["observed_at"], NOW + 3)
+        self.assertEqual(self.row()["observed_at"], NOW + 3.5)
         self.source.error = None
         with self.assertRaises(github.Deferred):
             github.collect(self.service, 1, self.source, NOW + 99)
@@ -260,6 +266,10 @@ class TwinTest(unittest.TestCase):
         headers = {"X-GitHub-Event": "push", "X-GitHub-Delivery": "delivery-0001",
                    "X-Hub-Signature-256": "sha256=" + hmac.new(SECRET.encode(), signed, hashlib.sha256).hexdigest()}
         self.assertEqual(request("POST", hook, signed + b" ", headers)[0], 401)
+        unregistered = signed.replace(b'"id": 1', b'"id": 999')
+        outside = {**headers, "X-Hub-Signature-256":
+                   "sha256=" + hmac.new(SECRET.encode(), unregistered, hashlib.sha256).hexdigest()}
+        self.assertEqual(request("POST", hook, unregistered, outside)[0], 401)
         self.assertEqual(request("POST", hook, signed, headers), (202, {"accepted": True, "duplicate": False}))
         self.assertEqual(request("POST", hook, signed, headers), (202, {"accepted": True, "duplicate": True}))
         self.assertEqual(self.row()["requested"], original + 1)

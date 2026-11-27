@@ -38,6 +38,7 @@
     const key = options.key || DEFAULT_KEY;
     const makeId = options.makeId || fallbackId;
     const now = options.now || Date.now;
+    const isSuccess = options.isSuccess || ((data) => Boolean(data?.state));
     const maxAgeMs = Number.isFinite(options.maxAgeMs) ? options.maxAgeMs : DEFAULT_MAX_AGE_MS;
 
     let memory = null;
@@ -137,7 +138,7 @@
         // Ambiguous success: replay the same opId to learn the recorded result.
         return { status: "retry", message: "invalid response" };
       }
-      if (!data || typeof data !== "object" || !data.state) {
+      if (!data || typeof data !== "object" || !isSuccess(data)) {
         return { status: "retry", message: "invalid response" };
       }
       clear();

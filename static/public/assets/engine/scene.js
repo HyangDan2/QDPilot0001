@@ -1,11 +1,20 @@
 // WorldScene: fixed 60 Hz simulation, requestAnimationFrame rendering, DPR
 // capped, paused while hidden, static under reduced motion.
 
-import { TAU, clamp, rand, LIMITS, MOTION, TIERS, TIER_ORDER } from "./config.js";
+import { TAU, clamp, rand, LIMITS, MOTION, TIERS } from "./config.js";
 import { SpriteLibrary, flipFor } from "./sprites.js";
 import { Effects, roundRect } from "./effects.js";
 import { HeroController } from "./motion.js";
-import { RoomPainter, layoutRacks, drawRack, drawEmptySlot } from "./room.js";
+import { Animator } from "./animation.js";
+import { RoomPainter, layoutProjectRacks, rackBudget, drawRack, drawEmptySlot } from "./room.js";
+
+const MAX_AGENTS = 4;
+const MAX_ENCOUNTERS = 6;
+const AGENT_COLORS = ["#6ee7f7", "#7ef7b1", "#ffd166", "#b58bff"];
+
+function bugKey(projectId, bugId) {
+  return JSON.stringify([String(projectId), String(bugId)]);
+}
 
 export class WorldScene {
   constructor(canvas, options = {}) {
@@ -19,11 +28,6 @@ export class WorldScene {
     this.onMotionChange = () => this.setMotion(!this.motionQuery.matches && !this.lowMotion);
     this.motionQuery.addEventListener?.("change", this.onMotionChange);
 
-    this.state = null;
-    this.derived = null;
-    this.level = 1;
-    this.heat = 0;
-    this.rps = 0;
     this.racks = [];
     this.emptySlot = null;
     this.bugs = [];
@@ -36,7 +40,6 @@ export class WorldScene {
     this.shake = 0;
     this.flash = 0;
     this.time = 0;
-    this.spawnTimer = 2.5;
     this.dpr = 1;
     this.width = 1;
     this.height = 1;
@@ -45,8 +48,16 @@ export class WorldScene {
     this.last = 0;
     this.accumulator = 0;
     this.running = true;
-    this.dirty = true;
-    this.prevCounts = null;
+    this.projects = [];
+    this.visibleProjects = [];
+    this.projectId = null;
+    this.page = 0;
+    this.agents = [];
+    this.agentSprites = new Map();
+    this.activeBugs = new Map();
+    this.encounters = new Map();
+    this.celebrations = new Map();
+    this.eventCursor = 0;
 
     this.showFps = new URLSearchParams(window.location.search).has("fps");
     this.frameSamples = [];
@@ -61,7 +72,7 @@ export class WorldScene {
     window.addEventListener("orientationchange", this.resize);
     document.addEventListener("visibilitychange", this.visibility);
     this.loadSprites();
-    this.start();
+    if (this.motion && !document.hidden) this.start();
   }
 
   get bugSize() {
@@ -89,24 +100,19 @@ export class WorldScene {
   ready() {
     this.animator.setSpecs(this.library.specs());
     this.loaded = true;
-    if (this.motion) {
-      this.spawnBug(0.3);
-      this.spawnBug(0.72);
-    }
+    for (const sprite of this.agentSprites.values()) sprite.animator.setSpecs(this.library.specs());
     this.render();
   }
 
   setMotion(motion) {
     this.motion = Boolean(motion);
     if (!this.motion) {
-      this.bugs = [];
-      this.effects.clear();
-      this.shake = 0;
-      this.hero.reset();
-    } else {
-      this.spawnTimer = 2;
+      this.stop();
+      this.clearEncounters();
+      this.syncBugs();
+    } else if (!document.hidden) {
+      this.start();
     }
-    this.dirty = true;
     this.render();
   }
 
@@ -124,8 +130,13 @@ export class WorldScene {
   }
 
   visibility() {
-    if (document.hidden) this.stop();
-    else this.start();
+    if (document.hidden) {
+      this.stop();
+      this.clearEncounters();
+      this.syncBugs();
+    } else if (this.motion) {
+      this.start();
+    }
   }
 
   resize() {
@@ -143,71 +154,174 @@ export class WorldScene {
     if (!this.placed) this.hero.home();
     else this.hero.clamp();
     this.layoutRacks();
+    this.syncBugs();
+    for (const bug of this.bugs) {
+      bug.x = clamp(bug.x, width * 0.12, width * 0.88);
+      bug.y = clamp(bug.y, this.floorY + height * 0.055, height * 0.9);
+    }
     this.render();
   }
 
   heroSpot() {
     const margin = this.heroMargin;
     return {
-      x: clamp(this.width * 0.5, margin, this.width - margin),
-      y: this.floorY + Math.min(this.height * 0.16, 96),
+      x: clamp(this.width * 0.73, margin, Math.max(margin, this.width - margin)),
+      y: this.floorY + Math.min(this.height * 0.21, 126),
     };
   }
 
-  setWorld(state, derived) {
-    if (!state || !derived) return;
-    const previous = this.prevCounts;
-    this.state = state;
-    this.derived = derived;
-    this.level = derived.level;
-    this.rps = derived.rps;
-    this.heat = clamp(derived.thermal_pct || 0, 0, 1.4);
-    const counts = state.servers || {};
-    this.prevCounts = { ...counts };
+  get pageCount() {
+    return Math.max(1, Math.ceil(this.projects.length / rackBudget(this.width)));
+  }
+
+  setPage(index) {
+    const next = clamp(Math.trunc(Number(index) || 0), 0, this.pageCount - 1);
+    if (next === this.page) return;
+    this.page = next;
+    this.clearEncounters();
     this.layoutRacks();
-    if (previous) {
-      for (const tier of TIER_ORDER) {
-        const before = previous[tier] || 0;
-        const after = counts[tier] || 0;
-        if (after > before) this.onInstall(tier, after - before);
-        if (after < before) this.dirty = true;
-      }
+    this.syncBugs();
+    this.render();
+  }
+
+  setSnapshot(payload, { projectId = null, animate = false } = {}) {
+    const selected = projectId == null || projectId === "" ? null : String(projectId);
+    if (selected !== this.projectId) {
+      this.projectId = selected;
+      this.page = 0;
+      this.clearEncounters();
     }
+    if (payload.cursorReset || payload.eventGap) {
+      this.eventCursor = 0;
+      this.clearEncounters();
+    }
+    this.projects = (payload.projects || []).filter((project) => selected === null || selected === String(project.id));
+    this.agents = payload.agents || [];
+    this.layoutRacks();
+
+    const events = payload.events || [];
+    if (animate && this.motion && !document.hidden && !payload.cursorReset && !payload.eventGap) {
+      this.queueEvents(events);
+    }
+    for (const event of events) this.eventCursor = Math.max(this.eventCursor, Number(event.id) || 0);
+    this.eventCursor = Math.max(this.eventCursor, Number(payload.cursor) || 0);
+    this.syncBugs();
     this.render();
   }
 
   layoutRacks() {
-    const counts = this.state?.servers || {};
-    const { racks, emptySlot } = layoutRacks({
-      width: this.width,
-      height: this.height,
-      floorY: this.floorY,
-      counts,
-    });
-    this.racks = racks;
-    this.emptySlot = emptySlot;
-    this.stats.racks = racks.length;
-    this.dirty = true;
+    const geometry = { width: this.width, height: this.height, floorY: this.floorY };
+    this.page = Math.min(this.page, this.pageCount - 1);
+    const budget = rackBudget(this.width);
+    this.visibleProjects = this.projects.slice(this.page * budget, (this.page + 1) * budget);
+    const layout = layoutProjectRacks({ ...geometry, projects: this.visibleProjects });
+    this.activeBugs = new Map(this.visibleProjects.flatMap((project) =>
+      (project.bugs || []).map((bug) => [bugKey(project.id, bug.id), { projectId: project.id }])
+    ));
+    for (const rack of layout.racks) {
+      if (!rack.projectId) continue;
+      const previous = this.racks.find((item) => item.projectId === rack.projectId);
+      if (previous && previous.tier === rack.tier) {
+        rack.pulse = previous.pulse;
+        rack.installing = previous.installing;
+      }
+    }
+    this.racks = layout.racks;
+    this.emptySlot = layout.emptySlot;
+    this.stats.racks = this.racks.length;
+  }
+
+  clearEncounters() {
+    this.encounters.clear();
+    this.celebrations.clear();
+    this.bugs = [];
+    this.effects.clear();
+    this.stats.particles = 0;
+    this.flash = 0;
+    this.shake = 0;
+    this.hero.reset();
+  }
+
+  queueEvents(events) {
+    const visible = new Set(this.visibleProjects.map((project) => String(project.id)));
+    const latest = new Map();
+    const fresh = events.filter((event) => Number(event.id) > this.eventCursor)
+      .sort((a, b) => Number(a.id) - Number(b.id));
+    for (const event of fresh) {
+      if (event.projectId != null && !visible.has(String(event.projectId))) continue;
+      if (["bug_opened", "bug_resolved", "bug_dismissed"].includes(event.type) && event.entityId != null) {
+        latest.set(bugKey(event.projectId, event.entityId), event);
+      } else if (["install", "levelup", "reboot"].includes(event.type)) {
+        this.celebrations.set(event.type, event);
+      }
+    }
+    for (const [key, event] of latest) {
+      if (event.type !== "bug_resolved" || this.activeBugs.has(key)) {
+        this.encounters.delete(key);
+      } else if (this.encounters.size < MAX_ENCOUNTERS && !this.bugs.some((bug) => bug.key === key && bug.state === "hit")) {
+        this.encounters.set(key, { projectId: event.projectId });
+      }
+    }
+  }
+
+  syncBugs() {
+    const visible = new Set(this.visibleProjects.map((project) => String(project.id)));
+    for (const [key, encounter] of this.encounters) {
+      if (this.activeBugs.has(key) || !visible.has(String(encounter.projectId))) this.encounters.delete(key);
+    }
+    const hits = this.bugs.filter((bug) => bug.state === "hit" && !this.activeBugs.has(bug.key)
+      && visible.has(String(bug.projectId)));
+    const keep = new Set(hits.map((bug) => bug.key));
+    const alive = new Map(this.bugs.filter((bug) => bug.state === "alive").map((bug) => [bug.key, bug]));
+    this.bugs = hits;
+    for (const records of [this.encounters, this.activeBugs]) {
+      for (const [key, record] of records) {
+        if (this.bugs.length >= LIMITS.bugs) break;
+        if (keep.has(key)) continue;
+        const old = alive.get(key);
+        if (old) this.bugs.push(old);
+        else this.spawnBug(key, record.projectId);
+        keep.add(key);
+      }
+    }
+    this.stats.bugs = this.bugs.length;
+  }
+
+  canAttack(bug) {
+    return this.bugs.includes(bug) && bug.state === "alive" && this.encounters.has(bug.key);
+  }
+
+  repairTarget(key = null) {
+    const worker = this.agents.find((agent) => agent.bugId != null && !agent.stale && ["coding", "testing"].includes(agent.status)
+      && this.activeBugs.has(bugKey(agent.projectId, agent.bugId))
+      && (key === null || key === bugKey(agent.projectId, agent.bugId)));
+    if (!worker) return null;
+    const rack = this.racks.find((item) => item.projectId === String(worker.projectId));
+    return rack ? { rack, key: bugKey(worker.projectId, worker.bugId) } : null;
+  }
+
+  playCelebration() {
+    if (!this.celebrations.size || this.hero.hero.mode !== "idle" || this.hero.oneshot) return;
+    const [kind, event] = this.celebrations.entries().next().value;
+    this.celebrations.delete(kind);
+    if (event.projectId != null && !this.racks.some((rack) => rack.projectId === String(event.projectId))) return;
+    this.handleEvent({ ...event, kind });
   }
 
   frame(timestamp) {
-    if (!this.running) return;
+    if (!this.running || !this.motion) return;
     const delta = Math.min(0.1, (timestamp - this.last) / 1000 || 0);
     this.last = timestamp;
-    if (this.motion) {
-      this.accumulator += delta;
-      const step = 1 / 60;
-      let steps = 0;
-      while (this.accumulator >= step && steps < 6) {
-        this.update(step);
-        this.accumulator -= step;
-        steps += 1;
-      }
-      this.sampleFps(delta);
-      this.render();
-    } else if (this.dirty) {
-      this.render();
+    this.accumulator += delta;
+    const step = 1 / 60;
+    let steps = 0;
+    while (this.accumulator >= step && steps < 6) {
+      this.update(step);
+      this.accumulator -= step;
+      steps += 1;
     }
+    this.sampleFps(delta);
+    this.render();
     this.raf = requestAnimationFrame(this.frame);
   }
 
@@ -228,13 +342,9 @@ export class WorldScene {
       rack.installing = Math.max(0, rack.installing - dt);
     }
     this.updateBugs(dt);
+    this.playCelebration();
     this.hero.update(dt);
     this.effects.update(dt);
-    this.spawnTimer -= dt;
-    if (this.spawnTimer <= 0 && this.bugs.length < LIMITS.bugs && this.rps > 0) {
-      this.spawnBug();
-      this.spawnTimer = rand(...MOTION.bugSpawn);
-    }
     this.stats.particles = this.effects.particles.length;
     this.stats.bugs = this.bugs.length;
   }
@@ -242,11 +352,13 @@ export class WorldScene {
   updateBugs(dt) {
     const floorTop = this.floorY + this.height * 0.055;
     const floorBottom = this.height * 0.9;
+    let cleanup = false;
     for (const bug of this.bugs) {
       bug.age += dt;
       bug.bob = Math.sin(this.time * 5 + bug.phase) * 4;
       if (bug.state === "hit") {
         bug.dead += dt;
+        if (bug.dead > 0.55) cleanup = true;
         continue;
       }
       bug.x += bug.vx * dt;
@@ -254,13 +366,18 @@ export class WorldScene {
       bug.y = clamp(bug.y + Math.sin(this.time * 0.7 + bug.phase) * 1.6 * dt, floorTop, floorBottom);
       bug.dir = bug.vx < 0 ? -1 : 1;
     }
-    this.bugs = this.bugs.filter((bug) => !(bug.state === "hit" && bug.dead > 0.55));
+    if (cleanup) {
+      this.bugs = this.bugs.filter((bug) => !(bug.state === "hit" && bug.dead > 0.55));
+      this.syncBugs();
+    }
   }
 
-  spawnBug(xRatio) {
-    const x = this.width * (xRatio ?? rand(0.16, 0.84));
+  spawnBug(key, projectId) {
+    const rack = this.racks.find((item) => item.projectId === String(projectId));
+    const x = (rack?.x || this.width * 0.5) + rand(-20, 20);
     this.bugs.push({
-      x,
+      key, projectId,
+      x: clamp(x, this.width * 0.12, this.width * 0.88),
       y: rand(this.floorY + this.height * 0.09, this.height * 0.86),
       vx: rand(...MOTION.bugSpeed) * (Math.random() < 0.5 ? -1 : 1),
       phase: rand(0, TAU),
@@ -275,11 +392,8 @@ export class WorldScene {
 
   hitTarget() {
     const target = this.hero.hero.target?.ref;
-    if (!target || this.bugs.indexOf(target) === -1) {
-      this.effects.slash(this.hero.hero.x + this.hero.hero.dir * 30, this.hero.hero.y - 80, this.hero.hero.dir);
-      this.shake = Math.max(this.shake, 2.5);
-      return;
-    }
+    if (!this.canAttack(target)) return;
+    this.encounters.delete(target.key);
     target.state = "hit";
     target.dead = 0;
     const hitX = target.x;
@@ -287,56 +401,40 @@ export class WorldScene {
     this.effects.slash(hitX, hitY, this.hero.hero.dir);
     this.effects.burst(hitX, hitY, "#b58bff", 18, 220);
     this.effects.burst(hitX, hitY, "#ffffff", 7, 150);
-    this.effects.floatText(hitX + rand(-8, 8), hitY - 12, String(Math.round(rand(18, 240) * Math.max(1, this.rps / 40))), "#ffe6a3");
+    this.effects.floatText(hitX, hitY - 12, "해결", "#ffe6a3");
     this.effects.ring(hitX, hitY, "#8b6bff", 56);
     this.shake = Math.max(this.shake, 5);
-    this.hero.hero.timer = Math.min(this.hero.hero.timer, 0.34);
   }
 
-  onInstall(tier, amount) {
-    const rack = this.racks.find((item) => item.tier === tier);
-    if (rack) {
-      rack.pulse = 1;
-      rack.installing = 1;
-      this.effects.ring(rack.x, rack.base - rack.h * 0.4, TIERS[tier].color, rack.w * 1.3);
-      this.effects.burst(rack.x, rack.base - 6, TIERS[tier].color, 12, 130);
-    }
-    this.effects.floatText(this.width * 0.5, this.height * 0.5, `+${amount} ${TIERS[tier].label}`, TIERS[tier].color);
+  onInstall(rack) {
+    rack.pulse = 1;
+    rack.installing = 1;
+    const { color, label } = TIERS[rack.tier];
+    this.effects.ring(rack.x, rack.base - rack.h * 0.4, color, rack.w * 1.3);
+    this.effects.burst(rack.x, rack.base - 6, color, 12, 130);
+    this.effects.floatText(this.width * 0.5, this.height * 0.5, `${label} 랙 설치`, color);
     this.hero.playOnce("install");
-    this.dirty = true;
   }
 
   handleEvent(event) {
     if (!event || !event.kind) return;
-    this.dirty = true;
     if (event.kind === "levelup") {
       const x = this.hero.hero.x;
       const y = this.hero.hero.y - this.height * 0.22;
       this.effects.ring(x, y, "#ffd166", 140);
       this.effects.ring(x, y, "#8b6bff", 190);
       this.effects.burst(x, y, "#ffd166", 28, 260);
-      this.effects.floatText(this.width * 0.5, this.height * 0.42, `LEVEL ${event.level ?? this.level}`, "#ffe9a8");
+      this.effects.floatText(this.width * 0.5, this.height * 0.42, `LEVEL ${event.level ?? this.visibleProjects.find((project) => String(project.id) === String(event.projectId))?.level ?? 1}`, "#ffe9a8");
       this.shake = 8;
       this.flash = 0.35;
       this.hero.playOnce("levelup");
-    } else if (event.kind === "upgrade") {
-      this.effects.ring(this.width * 0.5, this.floorY - 10, "#6ee7f7", 260);
-      this.effects.burst(this.width * 0.5, this.floorY - 40, "#6ee7f7", 20, 180);
-      for (const rack of this.racks) rack.pulse = Math.max(rack.pulse, 0.7);
-    } else if (event.kind === "achievement") {
-      this.effects.burst(this.width * 0.82, this.height * 0.18, "#ffd166", 24, 150);
-    } else if (event.kind === "reboot" || event.kind === "reset") {
+    } else if (event.kind === "reboot") {
       this.flash = 0.65;
       this.shake = 10;
-      for (const bug of this.bugs) {
-        this.effects.burst(bug.x, bug.y - this.bugSize * 0.4, "#b58bff", 10, 160);
-      }
-      this.bugs = [];
-      this.effects.rings = [];
       this.hero.reset();
-      this.dirty = true;
     } else if (event.kind === "install") {
-      if (event.tier && TIERS[event.tier]) this.onInstall(event.tier, event.qty || 1);
+      const rack = this.racks.find((item) => item.projectId === String(event.projectId));
+      if (rack) this.onInstall(rack);
     }
   }
 
@@ -345,7 +443,6 @@ export class WorldScene {
     const width = this.width;
     const height = this.height;
     if (!width || !height) return;
-    this.dirty = false;
     ctx.save();
     const shakeX = this.shake ? rand(-this.shake, this.shake) : 0;
     const shakeY = this.shake ? rand(-this.shake, this.shake) : 0;
@@ -359,6 +456,7 @@ export class WorldScene {
 
     const entities = [];
     for (const bug of this.bugs) entities.push({ y: bug.y, draw: () => this.drawBug(ctx, bug) });
+    this.addAgents(entities);
     entities.push({ y: this.hero.hero.y, draw: () => this.drawHero(ctx) });
     entities.sort((a, b) => a.y - b.y);
     for (const entity of entities) entity.draw();
@@ -367,13 +465,72 @@ export class WorldScene {
     this.effects.drawParticles(ctx);
     this.effects.drawRings(ctx);
     this.effects.drawTexts(ctx);
-    this.drawHeat(ctx, width, height);
     if (this.flash > 0.01) {
       ctx.fillStyle = `rgba(255,255,255,${this.flash * 0.5})`;
       ctx.fillRect(0, 0, width, height);
     }
     ctx.restore();
     if (this.showFps) this.drawFps(ctx);
+  }
+
+  addAgents(entities) {
+    const visible = this.agents.filter((agent) => this.racks.some((rack) => rack.projectId === String(agent.projectId)))
+      .sort((a, b) => Number(Boolean(a.stale)) - Number(Boolean(b.stale))
+        || (b.observedAt || 0) - (a.observedAt || 0)).slice(0, MAX_AGENTS);
+    const sprites = new Map();
+    for (const [index, agent] of visible.entries()) {
+      const key = JSON.stringify([agent.projectId, agent.id]);
+      let sprite = this.agentSprites.get(key);
+      if (!sprite) {
+        sprite = { animator: new Animator("idle", this.library.specs()), time: this.time };
+      }
+      const rack = this.racks.find((item) => item.projectId === String(agent.projectId));
+      const engaged = !agent.stale && ["coding", "testing"].includes(agent.status);
+      const repairs = engaged && agent.bugId != null && this.activeBugs.has(bugKey(agent.projectId, agent.bugId));
+      const state = this.motion && engaged ? (repairs ? "repair" : "run") : "idle";
+      sprite.animator.play(state);
+      sprite.animator.update(this.motion ? Math.max(0, this.time - sprite.time) : 0);
+      sprite.time = this.time;
+      sprites.set(key, sprite);
+      const phase = this.time * 1.2 + index * 2;
+      const drift = state === "run" ? Math.sin(phase) * 20 : 0;
+      const direction = state === "run" && Math.cos(phase) < 0 ? -1 : 1;
+      const lane = (index % 2 ? 1 : -1) * Math.max(48, rack.w * 0.65);
+      const x = clamp(rack.x + lane + drift, 35, this.width - 35);
+      const y = rack.base + 24 + Math.floor(index / 2) * 26;
+      const color = AGENT_COLORS[index];
+      entities.push({ y, draw: () => this.drawAgent(agent, sprite, x, y, color, direction) });
+    }
+    this.agentSprites = sprites;
+  }
+
+  drawAgent(agent, sprite, x, y, color, direction) {
+    const ctx = this.ctx;
+    const art = this.library.artFor(sprite.animator.state);
+    const frame = sprite.animator.frameIndex() % Math.max(1, art?.frames || 1);
+    const rect = art?.rect(frame);
+    const height = Math.min(104, this.heroHeight * 0.5);
+    ctx.save();
+    ctx.translate(x, y);
+    if (rect?.image && rect.sw > 0 && rect.sh > 0) {
+      const w = rect.sw * (height / rect.sh);
+      const [ax, ay] = art.anchorAt(frame);
+      ctx.save();
+      ctx.scale(flipFor(art.facing, direction), 1);
+      ctx.drawImage(rect.image, rect.sx, rect.sy, rect.sw, rect.sh, -w * ax, -height * ay, w, height);
+      ctx.restore();
+    } else {
+      this.drawFallbackHero(ctx, height, direction);
+    }
+    ctx.fillStyle = "#121525";
+    roundRect(ctx, -34, 1, 68, 13, 6);
+    ctx.fill();
+    ctx.fillStyle = color;
+    ctx.font = "600 9px system-ui";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(agent.name || `Agent ${String(agent.id).slice(-6)}`, 0, 8, 62);
+    ctx.restore();
   }
 
   drawBug(ctx, bug) {
@@ -495,16 +652,6 @@ export class WorldScene {
     ctx.arc(0, 0, radius, 0, TAU);
     ctx.fill();
     ctx.restore();
-  }
-
-  drawHeat(ctx, width, height) {
-    if (this.heat < 0.7) return;
-    const intensity = clamp((this.heat - 0.7) / 0.6, 0, 1) * 0.22;
-    const gradient = ctx.createRadialGradient(width / 2, this.floorY, width * 0.1, width / 2, this.floorY, width * 0.7);
-    gradient.addColorStop(0, "rgba(0,0,0,0)");
-    gradient.addColorStop(1, `rgba(255, 70, 90, ${intensity})`);
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
   }
 
   drawFps(ctx) {

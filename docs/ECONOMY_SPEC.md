@@ -1,5 +1,23 @@
 # 경제 명세 — Idle Ops
 
+## R3 · Commit economy
+
+| Measure | Rule |
+| --- | --- |
+| First observation | Zero XP, including projects migrated from Phase 2. |
+| Eligible commit | Verified reachable commit, added after baseline, with at most one parent. Each repository/SHA pays once. |
+| Award | 10 XP multiplied by the current project bonus. At 1.1×, a new commit awards 11 XP. |
+| Project Level | `1 + floor(project XP / 100)`. |
+| World XP and Level | Sum of the audience's project XP. The same level curve applies, with 100 XP per level and the remainder shown toward the next level. |
+| Automatic tier | Cache at level 1; App 5; DB 10; GPU 20; Quantum 40. |
+| Reboot | Requires 100 eligible commits since the last reboot. Resets the run counter and adds +0.1× for future awards, capped at 2×. |
+| Retained on reboot | Lifetime XP, tier, ledger, issue and CI state, and prior awards. |
+
+Time, telemetry and demo interactions produce zero XP. Issue and CI events alter
+the visual world through verified state. The code constants are in
+[`server/twin.py`](../server/twin.py). Sections below describe the archived
+Phase 2 economy and its preserved records.
+
 수치·공식의 정본은 [`server/economy.py`](../server/economy.py)입니다. 이 문서는 현재
 밸런스를 사람이 검토할 수 있게 정리한 것이며, 코드와 다르면 코드가 우선합니다.
 

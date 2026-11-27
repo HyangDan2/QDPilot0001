@@ -1,5 +1,34 @@
 # QDPilot0001 Idle Ops — DB 마이그레이션·백업·복구
 
+## R3 database migration and rollback
+
+R3 uses schema v6. Version 5 adds the GitHub repository/ref and commit ledgers, issue/CI
+projections, event cursors, Reboot idempotency and agent telemetry tables.
+The original world, operation, event, player and audit records are preserved.
+Version 6 adds the current development observation without rewriting XP, the ledger,
+or issue history. Older issue records are classified only after a verified REST
+refresh. R3 starts each project at zero XP and stops settling the legacy economy through
+the application. Production was observed at schema version 0; v4 is the source
+branch baseline. Versions 0, 4 and 5 migrate additively on service startup. A standalone
+pre-deploy backup preserves the original schema version.
+
+1. Stop the collector timer if installed and let the in-flight run exit.
+2. Use the R3 `server.backup create --db <live-db> --kind pre-deploy` and verify
+   the archive before switching the release. The existing web service may serve
+   reads during the online backup.
+3. Start the new release and check readiness and both views. Enable the collector
+   after confirming the registry and credentials.
+4. If rollback is needed, stop both the app and collector. Use the R3 backup CLI
+   to preserve a pre-restore archive and replace the DB with the verified
+   pre-deploy archive. Switch the release symlink to the previous release and
+   start the previous web service with its original configuration. Retain the
+   R3 pre-restore archive for investigation or recovery.
+5. Confirm restored schema and prior routes. Avoid hand-editing `user_version`.
+   During recovery, polling clients follow `cursorReset` and take a fresh snapshot.
+
+Phase 2 operational details below are historical where superseded by this
+section. Hard reset is absent from the R3 HTTP routes.
+
 이 문서는 Idle Ops 공유 월드 SQLite(`world`/`world_ops`/`world_events`/`admin_seen`/`audit_log`)의
 스키마 버전, 자동 마이그레이션, 정합성 백업, 복구 절차를 정의한다.
 
@@ -14,6 +43,8 @@
 | 2 | `world_ops.action_json/result_json`(멱등 재실행), `admin_seen`(관리자별 타임스탬프), `audit_log`(Hard Reset 감사) |
 | 3 | `admin_seen.observed_requests/observed_level/world_generation`(관리자별 확인 지점) |
 | 4 | `world.revision`(커밋마다 증가, 공개 스냅샷·이벤트 상한 정합) + `world_ops(created_at)` 인덱스 |
+| 5 | R3 GitHub Commit XP, 프로젝트·이슈·CI 투영, 이벤트, Reboot 및 에이전트 텔레메트리 |
+| 6 | 프로젝트별 개발 활동 시각, 현재 CI 상태 집계 |
 
 - 기동 시 `Store.__init__`이 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE`(누락 컬럼)로
   멱등 마이그레이션을 수행하고 `user_version`을 올린다. 별도 마이그레이션 명령은 필요 없다.

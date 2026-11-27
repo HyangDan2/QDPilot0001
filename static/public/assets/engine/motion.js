@@ -4,7 +4,7 @@
 // animation state. Level-up and install celebrations are one-shot overlays that
 // pause movement, then resume the previous mode.
 
-import { clamp, rand, pick, MOTION, TAU } from "./config.js";
+import { clamp, rand, MOTION, TAU } from "./config.js";
 import { Animator, STATES } from "./animation.js";
 
 const MODE_STATE = { idle: "idle", run: "run", attack: "attack", repair: "repair" };
@@ -100,10 +100,8 @@ export class HeroController {
 
     if (hero.mode === "run") {
       const bug = hero.target?.kind === "bug" ? hero.target.ref : null;
-      if (bug && bug.state !== "alive") {
-        hero.target = null;
-        this.setMode("idle");
-        hero.timer = rand(0.2, 0.6);
+      if ((bug && !scene.canAttack(bug)) || (!bug && !scene.repairTarget(hero.target?.key))) {
+        this.idle();
         return;
       }
       if (bug) {
@@ -150,6 +148,10 @@ export class HeroController {
     }
 
     if (hero.mode === "attack") {
+      if (!hero.impact && !scene.canAttack(hero.target?.ref)) {
+        this.idle();
+        return;
+      }
       hero.timer -= dt;
       const elapsed = this.attackDuration() - hero.timer;
       if (hero.impact === 0 && elapsed > this.attackHitTime()) {
@@ -165,6 +167,10 @@ export class HeroController {
     }
 
     if (hero.mode === "repair") {
+      if (!scene.repairTarget(hero.target?.key)) {
+        this.idle();
+        return;
+      }
       hero.timer -= dt;
       if (hero.timer <= 0) {
         const { x, y } = hero;
@@ -177,25 +183,27 @@ export class HeroController {
     }
   }
 
+  idle() {
+    this.hero.target = null;
+    this.hero.timer = 0.25;
+    this.hero.hop = 0;
+    this.setMode("idle");
+  }
+
   chooseTask() {
     const scene = this.scene;
     const hero = this.hero;
     const margin = scene.heroMargin;
-    const alive = scene.bugs.filter((bug) => bug.state === "alive");
-    if (alive.length) {
-      const target = pick(alive);
-      hero.target = { kind: "bug", ref: target };
-      hero.targetX = clamp(target.x, margin, Math.max(margin, scene.width - margin));
-      hero.targetY = clamp(target.y + 2, scene.floorY + scene.height * 0.075, scene.height * 0.88);
-      this.setMode("run");
-      hero.timer = 0;
+    const target = scene.bugs.find((bug) => scene.canAttack(bug));
+    const repair = target ? null : scene.repairTarget();
+    if (!target && !repair) {
+      this.idle();
       return;
     }
-    const racks = scene.racks.filter((rack) => rack.tier !== "cache");
-    const rack = racks.length ? pick(racks) : scene.racks[0];
-    hero.target = { kind: "rack", ref: rack };
-    hero.targetX = clamp((rack ? rack.x : scene.width * 0.5) + rand(-30, 30), margin, Math.max(margin, scene.width - margin));
-    hero.targetY = clamp((rack ? rack.base : scene.floorY) + rand(30, 70), scene.floorY + 70, scene.height * 0.87);
+    hero.target = target ? { kind: "bug", ref: target } : { kind: "rack", key: repair.key };
+    hero.targetX = clamp(target?.x ?? repair.rack.x, margin, Math.max(margin, scene.width - margin));
+    hero.targetY = clamp(target ? target.y + 2 : repair.rack.base + scene.height * 0.21,
+      scene.floorY + scene.height * 0.075, scene.height * 0.88);
     this.setMode("run");
     hero.timer = 0;
   }

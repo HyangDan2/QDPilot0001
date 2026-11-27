@@ -1,5 +1,31 @@
 # 게임 디자인 — Idle Ops
 
+## R3 · Development Digital Twin
+
+- Each allowlisted repository becomes one logical rack. The level increases with
+  Commit XP. Automatic rack tiers unlock at levels 1, 5, 10, 20 and 40.
+- An open GitHub issue labeled `bug`, `regression`, `critical` or `P0`, or a
+  verified CI failure, appears as a tracked bug. General tasks and enhancements
+  stay in development status. Removing the final qualifying label dismisses the
+  bug. Reopening or adding a qualifying label restores the same entity.
+- A completed bug issue or a matching CI success triggers defeat. An active CI
+  rerun retains the unresolved bug until a corresponding success arrives.
+- Agent status reflects explicit observations. Repair appears only when a current
+  observation explicitly names an active GitHub issue for the same project.
+  GitHub confirms the resolution separately.
+- The public dashboard shows approved public projects, development counts, last
+  observation times and an event feed. Rack and entity caps preserve the full
+  project/bug totals in the dashboard. The mobile drawer and fullscreen mode
+  share the same live data.
+- World XP is the sum of visible project XP. The main HUD shows the shared level
+  and progress to the next one across project filters.
+- Reboot is the manual progression action. Repository sync is an administrative
+  integration action with no reward of its own. Fictional room visuals and
+  synthetic demo activity are labeled.
+
+The sections below describe the archived Phase 2 economy and viewer. See
+[R3 economy](ECONOMY_SPEC.md) and [R3 API](R3_API.md) for current rules.
+
 HD2Lab Server-HQ의 **공유 월드 방치형 게임**. 관리자(운영자)들이 하나의 서버실을 함께
 키우고, 공개 화면에서는 누구나 같은 월드를 관전합니다.
 

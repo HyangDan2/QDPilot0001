@@ -24,6 +24,7 @@ import time
 from urllib.parse import quote
 
 from . import economy
+from .twin import DEVELOPMENT_TABLES, REQUIRED_TABLES as TWIN_TABLES
 from .store import BACKUP_KEEP, SCHEMA_VERSION, Store, WorldBusy
 
 REQUIRED_TABLES = {
@@ -51,7 +52,7 @@ def create(db, directory=None, kind="manual", keep=BACKUP_KEEP, force=False):
             if any(name.startswith(prefix) for name in os.listdir(target_dir)):
                 print("daily backup already recorded today; pass --force to add another")
                 return None
-    path = Store(db, backup_dir=target_dir).backup(kind, keep=keep)
+    path = Store(db, backup_dir=target_dir, initialize=False).backup(kind, keep=keep)
     print(path)
     return path
 
@@ -80,14 +81,17 @@ def verify_database(path):
             schema = int(con.execute("PRAGMA user_version").fetchone()[0])
         except sqlite3.Error as exc:
             problems.append(f"cannot read schema version: {exc}")
-        if schema is not None and (schema < 1 or schema > SCHEMA_VERSION):
+        if schema is not None and (schema < 0 or schema > SCHEMA_VERSION):
             problems.append(f"unsupported schema version: {schema}")
+        required_tables = {**REQUIRED_TABLES, **TWIN_TABLES} if schema is not None and schema >= 5 else REQUIRED_TABLES
+        if schema is not None and schema >= 6:
+            required_tables.update(DEVELOPMENT_TABLES)
         tables = {
             row[0]: {column[1] for column in con.execute(f'PRAGMA table_info("{row[0]}")')}
             for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
-            if row[0] in REQUIRED_TABLES
+            if row[0] in required_tables
         }
-        for name, required in REQUIRED_TABLES.items():
+        for name, required in required_tables.items():
             if name not in tables:
                 problems.append(f"missing table: {name}")
             else:
@@ -107,8 +111,15 @@ def verify_database(path):
                         problems.append("world state has no creation time")
                 except (ValueError, TypeError, json.JSONDecodeError) as exc:
                     problems.append(f"world state is invalid: {exc}")
+            op_columns = tables["world_ops"]
+            action_column = "action_json" if "action_json" in op_columns else "NULL"
+            result_column = "result_json" if "result_json" in op_columns else "NULL"
+            if schema is not None and schema >= 2 and (
+                "action_json" not in op_columns or "result_json" not in op_columns
+            ):
+                problems.append("world_ops is missing operation payload columns")
             for op_id, action, result in con.execute(
-                "SELECT op_id, action_json, result_json FROM world_ops"
+                f"SELECT op_id, {action_column}, {result_column} FROM world_ops"
             ):
                 if not isinstance(op_id, str) or not op_id:
                     problems.append("world_ops contains an empty op id")
@@ -199,7 +210,7 @@ def restore(db, source, directory=None):
     if Store.service_running(target):
         raise SystemExit("idle-ops service is running; stop it before restoring")
     os.makedirs(os.path.dirname(target), exist_ok=True)
-    store = Store(target, backup_dir=backup_dir(target, directory))
+    store = Store(target, backup_dir=backup_dir(target, directory), initialize=False)
     previous = None
     saved = None
     try:

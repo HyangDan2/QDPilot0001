@@ -9,7 +9,10 @@ import socketserver
 import stat
 import sys
 
-from .api import Server, make_handler
+from .api import Server
+from .r3_api import make_twin_handler
+from .r3_config import load
+from .twin import Twin
 from .store import Store
 
 
@@ -42,14 +45,15 @@ def main(argv=None):
     parser.add_argument("--public-root", help="serve the public world UI from this folder (local preview only)")
     args = parser.parse_args(argv)
 
-    store = Store(args.db)
+    projects, tokens, webhook_secret = load()
+    store = Store(args.db, preserve_legacy=True)
     # ``server.backup restore`` refuses to replace the file while this lock is
     # held, so an accidental online restore cannot race the running service.
     service_lock = store.acquire_service_lock()
-    handler = make_handler(
-        store,
+    handler = make_twin_handler(
+        Twin(store, projects, tokens), webhook_secret,
         dev_user=args.dev_user,
-        dev_role=args.dev_role,
+        dev_role=args.dev_role or ("admiral" if args.dev_user else None),
         dev_account_role=args.dev_account_role,
         static_root=args.static_root,
         public_root=args.public_root,

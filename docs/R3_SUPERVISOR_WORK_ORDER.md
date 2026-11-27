@@ -1,6 +1,6 @@
 # R3.0–R3.3 Development Digital Twin — Supervisor Work Order
 
-Status: APPROVED FOR FEATURE DEVELOPMENT; implementation and local parity audit pending.
+Status: IMPLEMENTED AND VERIFIED FOR SUPERVISOR REVIEW. See [parity audit](R3_PARITY_AUDIT.md) and [integrated QA](R3_QA.md). Production release awaits Overlord approval.
 Baseline: 937243c (V3.1 art, includes Phase 2). Main and existing art PR remain untouched.
 
 ## Authority and source of truth

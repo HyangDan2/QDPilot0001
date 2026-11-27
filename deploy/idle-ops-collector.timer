@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for queued and periodic Idle Ops GitHub reconciliations
+
+[Timer]
+OnBootSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=15s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

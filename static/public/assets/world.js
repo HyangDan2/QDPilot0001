@@ -1,680 +1,325 @@
 import { WorldScene } from "./engine.js";
 
 const $ = (id) => document.getElementById(id);
-const prefersReduced = window.matchMedia("(prefers-reduced-motion: reduce)");
-const MOTION_KEY = "idle-ops-motion";
-const POLL_MS = 8000;
-const FEED_LIMIT = 9;
-
-const TIERS = [
-  { id: "cache", letter: "C", name: "캐시 노드", short: "캐시", color: "#6ee7f7" },
-  { id: "app", letter: "A", name: "앱 서버", short: "앱", color: "#7ef7b1" },
-  { id: "db", letter: "D", name: "DB 노드", short: "DB", color: "#ffd166" },
-  { id: "gpu", letter: "G", name: "GPU 노드", short: "GPU", color: "#b58bff" },
-  { id: "quantum", letter: "Q", name: "양자 랙", short: "양자", color: "#ff7ce5" },
-];
-const TIER_BY_ID = new Map(TIERS.map((tier) => [tier.id, tier]));
-const UPGRADES = {
-  network: { letter: "N", color: "#6ee7f7" },
-  cooling: { letter: "C", color: "#7ef7b1" },
-  balancer: { letter: "L", color: "#ffd166" },
-  overclock: { letter: "O", color: "#ff7c95" },
+const params = new URLSearchParams(location.search);
+const demo = params.get("demo") === "1";
+const mobile = window.matchMedia("(max-width: 760px)");
+const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const motionKey = "idle-ops-motion";
+const pollInterval = 8000;
+const feedLimit = 40;
+const formatter = new Intl.NumberFormat("ko-KR");
+const statFields = { commits: "커밋", pulls: "PR", ci: "CI 검사", releases: "릴리스", issues: "이슈" };
+const eventLabels = {
+  commit: "커밋 반영", levelup: "레벨 상승", install: "랙 설치", reboot: "Reboot",
+  bug_opened: "버그 감지", bug_resolved: "버그 해결", bug_dismissed: "버그 닫힘",
+  agent: "에이전트 상태 변경", pull: "PR 변경", release: "릴리스", repair: "수리 작업",
 };
-const ACHIEVEMENT_NAMES = {
-  first_server: "첫 랙 설치",
-  ten_servers: "작은 클러스터",
-  rps_100: "워밍 캐시",
-  rps_10k: "트래픽 폭주",
-  lifetime_1m: "백만 요청",
-  level_10: "시니어 오퍼레이터",
-  first_reboot: "클린 재시작",
-  tokens_10: "업타임 수집가",
+const agentLabels = {
+  coding: "코딩 중", testing: "테스트 중", blocked: "차단됨", waiting: "대기 중",
+  completed: "완료", failed: "실패", stale: "관측 만료",
 };
 
-const els = {
-  sync: $("sync-state"),
-  live: document.querySelector(".hud-live"),
-  level: $("hud-level"),
-  levelBonus: $("hud-level-bonus"),
-  levelTrack: $("level-track"),
-  levelBar: $("level-bar"),
-  levelNext: $("level-next"),
-  rps: $("stat-rps"),
-  requests: $("stat-requests"),
-  heat: $("stat-heat"),
-  tokens: $("stat-tokens"),
-  feedList: $("feed-list"),
-  feedEmpty: $("feed-empty"),
-  drawer: $("drawer"),
-  drawerOpen: $("drawer-open"),
-  drawerClose: $("drawer-close"),
-  scrim: $("scrim"),
-  drawerSummary: $("drawer-summary"),
-  serverList: $("server-list"),
-  upgradeList: $("upgrade-list"),
-  achievementList: $("achievement-list"),
-  tabs: Array.from(document.querySelectorAll(".tab")),
-  panels: Array.from(document.querySelectorAll(".tab-panel")),
-  menu: $("menu"),
-  menuOpen: $("menu-open"),
-  help: $("help-dialog"),
-  helpOpen: $("help-open"),
-  toast: $("toast-region"),
-  loading: $("loading"),
-  error: $("error"),
-  retry: $("retry"),
-};
-
-let scene = null;
-let data = null;
-let cursor = 0;
-let primed = false;
-let seen = new Set();
+let snapshot = null;
 let feed = [];
-let lastLevel = null;
-let levelSeen = null;
-let failures = 0;
-let fetching = false;
-let pollTimer = 0;
-let drawerIsOpen = false;
-let menuIsOpen = false;
-let renderSignature = "";
-let baseRequests = 0;
-let baseAt = 0;
-let liveRps = 0;
-let receivedWall = Date.now();
-let serverNow = 0;
+let cursor = null;
+let selected = null;
+let polling = false;
+let scene = null;
+let lowMotion = false;
+let gap = false;
+let resumed = false;
 
-function compact(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "–";
-  const sign = n < 0 ? "-" : "";
-  const abs = Math.abs(n);
-  for (const [size, suffix] of [[1e12, "조"], [1e8, "억"], [1e4, "만"]]) {
-    if (abs >= size) {
-      const scaled = abs / size;
-      const digits = scaled >= 100 ? 0 : scaled >= 10 ? 1 : 2;
-      return sign + trimDecimal(scaled, digits) + suffix;
-    }
-  }
-  if (abs >= 100) return sign + Math.round(abs).toLocaleString("ko-KR");
-  return sign + trimDecimal(abs, abs < 10 ? 1 : 0);
+function node(tag, text, className) {
+  const element = document.createElement(tag);
+  if (text !== undefined) element.textContent = text;
+  if (className) element.className = className;
+  return element;
 }
 
-function trimDecimal(value, digits) {
-  return String(parseFloat(value.toFixed(digits)));
+function age(at) {
+  if (!at || !Number.isFinite(at)) return "관측 기록 없음";
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - at));
+  if (seconds < 60) return "1분 이내";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}분 전`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}시간 전`;
+  return `${Math.floor(seconds / 86400)}일 전`;
 }
 
-function rate(value) {
-  const n = Number(value) || 0;
-  if (n >= 100) return compact(n);
-  return trimDecimal(n, n >= 10 ? 1 : 2);
+function timeNode(at) {
+  const time = node("time", age(at));
+  const date = new Date(at * 1000);
+  if (at && Number.isFinite(date.getTime())) time.dateTime = date.toISOString();
+  return time;
 }
 
-function ago(seconds) {
-  const s = Math.max(0, Math.round(seconds));
-  if (s < 5) return "방금";
-  if (s < 60) return `${s}초 전`;
-  if (s < 3600) return `${Math.floor(s / 60)}분 전`;
-  if (s < 86400) return `${Math.floor(s / 3600)}시간 전`;
-  return `${Math.floor(s / 86400)}일 전`;
+function sync(text, indicator) {
+  $("sync-state").textContent = text;
+  $("sync-state").dataset.indicator = indicator;
 }
 
-function since(value) {
-  return serverNow ? serverNow - Number(value || 0) : 0;
-}
-
-function setSync(text, state = "") {
-  if (!els.sync) return;
-  els.sync.textContent = text;
-  els.live?.classList.toggle("is-stale", state === "stale");
-  els.live?.classList.toggle("is-error", state === "error");
-}
-
-function getLowMotion() {
-  try {
-    return localStorage.getItem(MOTION_KEY) === "low";
-  } catch (error) {
-    return false;
-  }
-}
-
-function setLowMotion(low) {
-  try {
-    localStorage.setItem(MOTION_KEY, low ? "low" : "auto");
-  } catch (error) { /* private mode */ }
-  document.documentElement.dataset.motion = low ? "low" : "auto";
+function setLowMotion(value) {
+  lowMotion = value;
   if (scene) {
-    scene.lowMotion = low;
-    scene.setMotion(!prefersReduced.matches && !low);
+    scene.lowMotion = value;
+    scene.setMotion(!value && !motion.matches);
   }
-  const item = els.menu.querySelector('[data-action="motion"]');
-  if (item) {
-    item.setAttribute("aria-pressed", low ? "true" : "false");
-    item.textContent = low ? "연출 켜기" : "연출 줄이기";
+  const button = $("motion-toggle");
+  button.setAttribute("aria-pressed", String(value));
+  button.textContent = value ? "연출 켜기" : "연출 줄이기";
+}
+
+function renderProjectPanel(projects) {
+  const filter = $("project-filter");
+  const options = [["", "전체 프로젝트"], ...snapshot.projects.map(({ id, name }) => [String(id), name])];
+  if (options.length !== filter.options.length || options.some(([id, name], index) => {
+    const option = filter.options[index];
+    return option.value !== id || option.textContent !== name;
+  })) {
+    filter.replaceChildren(...options.map(([id, name]) => {
+      const option = node("option", name);
+      option.value = id;
+      return option;
+    }));
   }
-}
+  filter.value = selected ?? "";
+  filter.disabled = snapshot.projects.length === 0;
 
-function toast(message, gold = false) {
-  if (!els.toast) return;
-  const item = document.createElement("p");
-  item.className = gold ? "toast is-gold" : "toast";
-  item.textContent = message;
-  els.toast.append(item);
-  while (els.toast.children.length > 3) els.toast.firstElementChild.remove();
-  setTimeout(() => {
-    item.style.opacity = "0";
-    item.style.transform = "translateY(6px)";
-    setTimeout(() => item.remove(), 260);
-  }, 4200);
-}
-
-function tierLabel(id) {
-  return TIER_BY_ID.get(id)?.short || id || "설비";
-}
-
-function upgradeName(id) {
-  const found = data?.catalog?.upgrades?.find((upgrade) => upgrade.id === id);
-  return found?.name || "업그레이드";
-}
-
-function eventNode(event) {
-  const li = document.createElement("li");
-  li.className = `ev-${event.kind}`;
-  const time = document.createElement("time");
-  time.dateTime = new Date((event.at || 0) * 1000).toISOString();
-  time.dataset.at = String(event.at || 0);
-  time.textContent = ago(since(event.at));
-  const text = document.createElement("span");
-
-  if (event.kind === "install") {
-    const bold = document.createElement("b");
-    bold.textContent = `${tierLabel(event.tier)} ×${event.qty ?? 1}`;
-    text.append(bold, " 설치");
-  } else if (event.kind === "upgrade") {
-    const bold = document.createElement("b");
-    bold.textContent = `${upgradeName(event.upgrade)} Lv.${event.level ?? "?"}`;
-    text.append(bold, " 업그레이드");
-  } else if (event.kind === "levelup") {
-    const bold = document.createElement("b");
-    bold.textContent = `레벨 ${event.level ?? "?"}`;
-    text.append(bold, " 달성");
-  } else if (event.kind === "achievement") {
-    const bold = document.createElement("b");
-    bold.textContent = ACHIEVEMENT_NAMES[event.achievement] || "업적";
-    text.append("업적 달성 · ", bold);
-  } else if (event.kind === "reboot") {
-    const bold = document.createElement("b");
-    bold.textContent = `토큰 +${event.tokens ?? 0}`;
-    text.append("월드 Reboot · ", bold);
-  } else if (event.kind === "reset") {
-    text.append("월드가 초기화되었습니다");
+  const details = $("project-details");
+  details.replaceChildren();
+  if (!projects.length) {
+    details.append(node("p", "공개된 프로젝트가 아직 없습니다.", "empty"));
+    return;
+  }
+  const project = selected === null ? null : projects[0];
+  const summary = node("div", undefined, "project-summary");
+  const title = node("div", undefined, "project-title");
+  title.append(node("h3", project?.name ?? "전체 프로젝트"), node("p", project ? `LV ${project.level}` : `${projects.length}개`));
+  summary.append(title);
+  const observation = node("p", undefined, "project-signal");
+  if (project) {
+    observation.append(timeNode(project.observedAt));
+    if (project.stale) {
+      observation.classList.add("is-stale");
+      observation.prepend("GitHub 관측 지연 · ");
+    } else if (project.observedAt) observation.prepend("최근 GitHub 관측 · ");
   } else {
-    text.append("월드 이벤트");
+    const delayed = projects.filter((item) => item.stale || !item.observedAt).length;
+    observation.textContent = delayed ? `미관측 또는 관측 지연 ${delayed}개` : "GitHub 관측 정상";
+    observation.classList.toggle("is-stale", delayed > 0);
   }
-  li.append(time, text);
-  return li;
+  summary.append(observation);
+  const metrics = node("dl", undefined, "project-stats");
+  const totals = Object.fromEntries(Object.keys(statFields).map((key) => [
+    key, projects.reduce((sum, item) => sum + (item.stats?.[key] ?? 0), 0),
+  ]));
+  const entries = Object.entries(statFields).map(([key, label]) => [label, totals[key]]);
+  entries.push(["미해결 버그", projects.reduce((sum, item) => sum + (item.bugCount ?? item.bugs?.length ?? 0), 0)]);
+  if (project) entries.push(["게임 XP", project.xp]);
+  for (const [label, value] of entries) {
+    const metric = node("div");
+    metric.append(node("dt", label), node("dd", Number.isFinite(value) ? formatter.format(value) : "–"));
+    metrics.append(metric);
+  }
+  details.append(summary, metrics);
 }
 
-function renderFeed(newestId = null) {
-  if (!els.feedList) return;
-  els.feedList.replaceChildren();
-  if (!feed.length) {
-    els.feedEmpty.hidden = false;
-    els.feedList.hidden = true;
-    return;
-  }
-  els.feedEmpty.hidden = true;
-  els.feedList.hidden = false;
-  for (const event of feed) {
-    const node = eventNode(event);
-    if (newestId !== null && event.id === newestId) node.classList.add("is-new");
-    els.feedList.append(node);
-  }
-}
-
-function pushEvents(events, animate) {
-  const fresh = events
-    .filter((event) => Number.isFinite(event.id) && !seen.has(event.id))
-    .sort((a, b) => a.id - b.id);
-  for (const event of fresh) {
-    seen.add(event.id);
-    feed.unshift(event);
-    if (animate) {
-      if (event.kind !== "install") scene?.handleEvent(event);
-      announceEvent(event);
+function renderFeed(names) {
+  const events = feed.filter((event) => selected === null || String(event.projectId) === selected);
+  const list = $("feed-list");
+  list.replaceChildren(...events.map((event) => {
+    const item = node("li", undefined, event.type);
+    const title = node("strong", eventLabels[event.type] ?? "개발 활동");
+    const name = names.get(String(event.projectId));
+    if (name && selected === null) {
+      const text = node("span");
+      text.append(title, ` · ${name}`);
+      item.append(timeNode(event.at), text);
+    } else {
+      item.append(timeNode(event.at), title);
     }
-  }
-  feed = feed.slice(0, FEED_LIMIT);
-  renderFeed(fresh.length ? fresh[fresh.length - 1].id : null);
+    return item;
+  }));
+  $("feed-scope").textContent = names.get(selected) ?? "전체 프로젝트";
+  $("feed-empty").hidden = events.length > 0;
+  $("feed-gap").hidden = !gap;
 }
 
-function announceEvent(event) {
-  if (event.kind === "levelup") {
-    toast(`운영 레벨 ${event.level ?? "?"} 달성`, true);
-  } else if (event.kind === "achievement") {
-    toast(`업적 달성 · ${ACHIEVEMENT_NAMES[event.achievement] || "업적"}`, true);
-  } else if (event.kind === "install") {
-    toast(`${tierLabel(event.tier)} ×${event.qty ?? 1} 설치가 반영되었습니다`);
-  } else if (event.kind === "upgrade") {
-    toast(`${upgradeName(event.upgrade)} Lv.${event.level ?? "?"} 업그레이드`);
-  } else if (event.kind === "reboot") {
-    toast(`월드 Reboot · 가동 토큰 +${event.tokens ?? 0}`, true);
-  } else if (event.kind === "reset") {
-    toast("월드가 초기화되었습니다", true);
-  }
-}
-
-function renderHud() {
-  if (!data) return;
-  const { state, derived } = data;
-  els.level.textContent = derived.level;
-  els.levelBonus.textContent = `+${Math.round((derived.level_bonus || 0) * 100)}% RPS`;
-  const progress = Math.round((derived.level_progress || 0) * 100);
-  els.levelBar.style.width = `${progress}%`;
-  els.levelTrack.setAttribute("aria-valuenow", String(progress));
-  const remaining = Math.max(0, (derived.next_level_at || 0) - (state.total_lifetime || 0));
-  els.levelNext.textContent = `다음 레벨까지 ${compact(remaining)} 요청`;
-  els.rps.textContent = rate(derived.rps);
-  els.rps.title = `${Number(derived.rps).toLocaleString("ko-KR")} RPS`;
-  baseRequests = Number(state.requests) || 0;
-  baseAt = performance.now();
-  els.requests.textContent = compact(baseRequests);
-  els.requests.title = `${Math.floor(baseRequests).toLocaleString("ko-KR")} 요청`;
-  const thermal = Math.round((derived.thermal_pct || 0) * 100);
-  els.heat.textContent = `${thermal}%`;
-  els.heat.title = `열 ${Math.round(derived.heat || 0)} · 냉각 ${Math.round(derived.cooling || 0)}`;
-  els.tokens.textContent = compact(state.tokens || 0);
-  els.tokens.title = `${Number(state.tokens || 0).toLocaleString("ko-KR")} 토큰`;
-}
-
-function renderSignatureNow() {
-  if (!data) return "";
-  const state = data.state;
-  return JSON.stringify([state.servers, state.upgrades, state.achievements, data.derived.level, state.tokens]);
-}
-
-function renderDrawer(force = false) {
-  if (!data) return;
-  const signature = renderSignatureNow();
-  if (!force && signature === renderSignature) return;
-  renderSignature = signature;
-  const { state, derived, catalog } = data;
-  const unlocked = new Set(state.achievements || []);
-  els.drawerSummary.textContent =
-    `${derived.total_servers}대 가동 · RPS ${rate(derived.rps)} · 업적 ${unlocked.size}/${catalog.achievements.length}`;
-
-  els.serverList.replaceChildren();
-  for (const tier of TIERS) {
-    const cat = catalog.tiers.find((item) => item.id === tier.id) || {};
-    const owned = Number(state.servers[tier.id] || 0);
-    const card = document.createElement("article");
-    card.className = owned ? "card" : "card is-empty";
-    const icon = document.createElement("span");
-    icon.className = "card-icon";
-    icon.style.color = tier.color;
-    icon.textContent = tier.letter;
-    const body = document.createElement("div");
-    const name = document.createElement("h3");
-    name.className = "card-name";
-    name.textContent = tier.name;
-    const meta = document.createElement("p");
-    meta.className = "card-meta";
-    meta.textContent = `기당 ${rate(cat.rps || 0)} RPS · 발열 ${cat.heat ?? "?"}`;
-    const effect = document.createElement("p");
-    effect.className = "card-effect";
-    effect.textContent = owned
-      ? `현재 ${compact(owned * (cat.rps || 0))} RPS 기여 · 다음 증설 ${compact(cat.cost || 0)} 요청`
-      : `미설치 · 증설 비용 ${compact(cat.cost || 0)} 요청`;
-    body.append(name, meta, effect);
-    const count = document.createElement("div");
-    count.className = "card-count";
-    const strong = document.createElement("strong");
-    strong.textContent = owned ? `×${owned}` : "—";
-    strong.style.color = owned ? tier.color : "";
-    const label = document.createElement("span");
-    label.textContent = owned ? "보유" : "대기";
-    count.append(strong, label);
-    card.append(icon, body, count);
-    els.serverList.append(card);
-  }
-
-  els.upgradeList.replaceChildren();
-  for (const cat of catalog.upgrades) {
-    const info = UPGRADES[cat.id] || { letter: "?", color: "#b58bff" };
-    const card = document.createElement("article");
-    card.className = cat.level ? "card" : "card is-empty";
-    const icon = document.createElement("span");
-    icon.className = "card-icon";
-    icon.style.color = info.color;
-    icon.textContent = info.letter;
-    const body = document.createElement("div");
-    const name = document.createElement("h3");
-    name.className = "card-name";
-    name.textContent = cat.name;
-    const effect = document.createElement("p");
-    effect.className = "card-effect";
-    effect.textContent = cat.desc;
-    const meta = document.createElement("p");
-    meta.className = "card-meta";
-    meta.textContent = cat.cost === null || cat.cost === undefined
-      ? "최대 레벨"
-      : `다음 업그레이드 ${compact(cat.cost)} 요청`;
-    const pips = document.createElement("div");
-    pips.className = "level-pips";
-    pips.setAttribute("aria-hidden", "true");
-    for (let i = 0; i < cat.max; i += 1) {
-      const pip = document.createElement("i");
-      if (i < cat.level) pip.className = "on";
-      pips.append(pip);
+function renderAgents(names) {
+  const agents = snapshot.agents.filter((agent) => selected === null || String(agent.projectId) === selected);
+  $("agent-list").replaceChildren(...agents.map((agent) => {
+    const item = node("li");
+    const identity = node("div");
+    const details = node("p");
+    const name = names.get(String(agent.projectId));
+    if (name) details.append(`${name} · `);
+    details.append(timeNode(agent.observedAt));
+    identity.append(node("strong", `에이전트 ${String(agent.id).slice(-6)}`), details);
+    const status = agent.stale ? "stale" : agent.status;
+    const statusText = agentLabels[status] ?? "상태 확인 중";
+    if (status === "stale" && agentLabels[agent.lastStatus]) {
+      details.append(` · 마지막 상태 ${agentLabels[agent.lastStatus]}`);
     }
-    body.append(name, effect, meta, pips);
-    const count = document.createElement("div");
-    count.className = "card-count";
-    const strong = document.createElement("strong");
-    strong.textContent = `${cat.level}/${cat.max}`;
-    const label = document.createElement("span");
-    label.textContent = "레벨";
-    count.append(strong, label);
-    card.append(icon, body, count);
-    els.upgradeList.append(card);
-  }
-
-  els.achievementList.replaceChildren();
-  for (const item of catalog.achievements) {
-    const unlockedNow = unlocked.has(item.id);
-    const row = document.createElement("article");
-    row.className = unlockedNow ? "achievement" : "achievement is-locked";
-    const badge = document.createElement("span");
-    badge.className = "achievement-badge";
-    badge.setAttribute("aria-hidden", "true");
-    badge.textContent = unlockedNow ? "★" : "·";
-    const body = document.createElement("div");
-    const name = document.createElement("h3");
-    name.textContent = item.name;
-    const desc = document.createElement("p");
-    desc.textContent = unlockedNow ? item.desc : "잠김 · " + item.desc;
-    body.append(name, desc);
-    const bonus = document.createElement("span");
-    bonus.className = "achievement-bonus";
-    bonus.textContent = `+${Math.round((item.bonus || 0) * 100)}%`;
-    row.append(badge, body, bonus);
-    els.achievementList.append(row);
-  }
+    const progress = agent.progress;
+    const confirmed = status !== "stale" && Number.isFinite(progress) && progress >= 0 && progress <= 100;
+    const activity = node("span", confirmed ? `${statusText} · ${progress}%` : statusText, "agent-status");
+    activity.dataset.status = status;
+    item.append(identity, activity);
+    return item;
+  }));
+  $("agent-empty").hidden = agents.length > 0;
 }
 
-function ingest(payload) {
-  if (!payload || !payload.state || !payload.derived || !payload.catalog) return false;
-  const wasPrimed = primed;
-  const previousLevel = lastLevel;
-  data = payload;
-  serverNow = Number(payload.serverTime) || Date.now() / 1000;
-  receivedWall = Date.now();
-  liveRps = Number(payload.derived.rps) || 0;
-  if (payload.cursorReset || payload.eventGap) {
-    seen.clear();
-    feed = [];
-    if (payload.cursorReset) cursor = 0;
-  }
-  cursor = Math.max(cursor, Number(payload.cursor) || 0);
-  const events = Array.isArray(payload.events) ? payload.events : [];
-  const sawLevelEvent = wasPrimed && events.some((event) => event.kind === "levelup");
-  pushEvents(events, wasPrimed && !payload.cursorReset && !payload.eventGap);
-  renderHud();
-  scene?.setWorld(payload.state, payload.derived);
-  renderDrawer();
-
-  if (wasPrimed && previousLevel !== null && payload.derived.level > previousLevel && !sawLevelEvent) {
-    scene?.handleEvent({ kind: "levelup", level: payload.derived.level });
-    toast(`운영 레벨 ${payload.derived.level} 달성`, true);
-  }
-  levelSeen = payload.derived.level;
-  lastLevel = payload.derived.level;
-  primed = true;
-  return true;
+function renderPages() {
+  const page = scene?.page ?? 0;
+  const pages = scene?.pageCount ?? 1;
+  $("rack-pages").hidden = pages < 2;
+  $("rack-page").textContent = `${page + 1} / ${pages}`;
+  $("page-prev").disabled = page <= 0;
+  $("page-next").disabled = page >= pages - 1;
 }
 
-function requestUrl() {
-  const sinceValue = primed ? cursor : 0;
-  return `api/v1/state?since=${encodeURIComponent(sinceValue)}`;
+function render(events, animate) {
+  if (selected !== null && !snapshot.projects.some((item) => String(item.id) === selected)) selected = null;
+  const projects = snapshot.projects.filter((item) => selected === null || String(item.id) === selected);
+  const names = new Map(snapshot.projects.map((item) => [String(item.id), item.name]));
+  const bugs = projects.reduce((sum, item) => sum + (item.bugCount ?? item.bugs?.length ?? 0), 0);
+  $("room-caption").textContent = names.get(selected) ?? "실제 개발 활동을 게임 속 랙과 캐릭터로 표시합니다.";
+  $("room-counts").textContent = `프로젝트 ${projects.length} · 미해결 버그 ${bugs}`;
+
+  const projectId = projects.find((item) => String(item.id) === selected)?.id ?? null;
+  scene?.setSnapshot({ ...snapshot, events }, { projectId, animate });
+  renderPages();
+  renderProjectPanel(projects);
+  renderFeed(names);
+  renderAgents(names);
 }
 
-async function fetchState() {
-  if (fetching) return;
-  clearTimeout(pollTimer);
-  if (document.hidden) return;
-  fetching = true;
-  setSync(primed ? "동기화 중…" : "접속 중…");
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
+async function load() {
+  if (polling) return;
+  polling = true;
   try {
-    const response = await fetch(requestUrl(), {
+    const query = new URLSearchParams();
+    if (demo) query.set("demo", "1");
+    if (cursor !== null) query.set("since", String(cursor));
+    const response = await fetch(`./api/v1/state?${query}`, {
+      credentials: "omit",
       cache: "no-store",
+      signal: AbortSignal.timeout(12000),
       headers: { Accept: "application/json" },
-      signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = await response.json();
-    if (!ingest(payload)) throw new Error("malformed payload");
-    failures = 0;
-    els.loading.hidden = true;
-    els.error.hidden = true;
-    if (payload.stale) {
-      setSync("마지막 정상 데이터 표시 중", "stale");
-    } else {
-      setSync("공유 월드 · 동기화됨");
+    if (!response.ok) throw new Error("State request failed");
+    const result = await response.json();
+    if (result.version !== 1 || !Array.isArray(result.projects) || !Array.isArray(result.agents) ||
+        !Array.isArray(result.events) || !Number.isSafeInteger(result.cursor)) {
+      throw new Error("Invalid state response");
     }
-    schedule(POLL_MS);
+    const reset = Boolean(result.cursorReset || result.eventGap);
+    const animate = !document.hidden && !resumed && snapshot !== null && cursor !== null && !reset;
+    resumed = false;
+    const fresh = reset || cursor === null ? result.events : result.events.filter((event) => event.id > cursor);
+    if (reset) feed = [];
+    gap = gap || reset;
+    const byId = new Map([...feed, ...fresh].map((event) => [event.id, event]));
+    feed = [...byId.values()].sort((a, b) => b.id - a.id).slice(0, feedLimit);
+    snapshot = result;
+    cursor = result.cursor;
+    render(fresh, animate);
+    sync(demo ? "데모 연결됨" : "연결됨", "live");
+    $("connection-error").hidden = true;
   } catch (error) {
-    failures += 1;
-    setSync("연결 재시도 중", "error");
-    if (!primed) {
-      els.loading.hidden = true;
-      els.error.hidden = false;
-    } else if (failures === 1) {
-      toast("월드와 동기화하지 못했습니다. 자동으로 재시도합니다.");
-    }
-    const backoff = Math.min(30000, 3000 * Math.max(1, failures));
-    schedule(backoff);
+    sync(snapshot ? "연결 지연" : "연결 실패", "stale");
+    $("connection-message").textContent = snapshot
+      ? "연결이 지연되어 마지막으로 받은 상태를 표시합니다."
+      : "서버에 연결하지 못했습니다.";
+    $("connection-error").hidden = false;
   } finally {
-    clearTimeout(timer);
-    fetching = false;
+    polling = false;
   }
 }
 
-function schedule(ms) {
-  clearTimeout(pollTimer);
-  if (document.hidden) return;
-  pollTimer = setTimeout(fetchState, ms);
+const theater = $("theater");
+const drawer = $("project-drawer");
+const projectPanel = $("project-panel");
+const projectHome = $("project-home");
+const watch = $("watch");
+
+function updateWatch() {
+  const active = document.fullscreenElement === theater || theater.classList.contains("is-watch");
+  watch.setAttribute("aria-pressed", String(active));
+  watch.textContent = active ? "전체 화면 닫기" : "전체 화면";
 }
 
-function openDrawer() {
-  if (drawerIsOpen) return;
-  drawerIsOpen = true;
-  closeMenu();
-  els.drawer.hidden = false;
-  els.scrim.hidden = false;
-  document.body.classList.add("is-locked");
-  renderDrawer(true);
-  requestAnimationFrame(() => {
-    els.scrim.classList.add("is-open");
-    els.drawer.classList.add("is-open");
-  });
-  els.drawerOpen.setAttribute("aria-expanded", "true");
-  setTimeout(() => els.drawerClose.focus(), 30);
-}
-
-function closeDrawer(restore = true) {
-  if (!drawerIsOpen) return;
-  drawerIsOpen = false;
-  els.scrim.classList.remove("is-open");
-  els.drawer.classList.remove("is-open");
-  els.drawerOpen.setAttribute("aria-expanded", "false");
-  document.body.classList.remove("is-locked");
-  setTimeout(() => {
-    if (!drawerIsOpen) {
-      els.drawer.hidden = true;
-      els.scrim.hidden = true;
+async function toggleWatch() {
+  if (document.fullscreenElement === theater) {
+    await document.exitFullscreen();
+  } else if (theater.classList.contains("is-watch")) {
+    theater.classList.remove("is-watch");
+  } else {
+    try {
+      if (!theater.requestFullscreen) throw new Error("Fullscreen unavailable");
+      await theater.requestFullscreen();
+    } catch (error) {
+      theater.classList.add("is-watch");
     }
-  }, 280);
-  if (restore) els.drawerOpen.focus();
-}
-
-function openMenu() {
-  menuIsOpen = true;
-  els.menu.hidden = false;
-  els.menuOpen.setAttribute("aria-expanded", "true");
-  els.menu.querySelector(".menu-item")?.focus();
-}
-
-function closeMenu(restore = false) {
-  if (!menuIsOpen) return;
-  menuIsOpen = false;
-  els.menu.hidden = true;
-  els.menuOpen.setAttribute("aria-expanded", "false");
-  if (restore) els.menuOpen.focus();
-}
-
-function selectTab(tab) {
-  for (const item of els.tabs) {
-    const active = item === tab;
-    item.classList.toggle("is-active", active);
-    item.setAttribute("aria-selected", active ? "true" : "false");
-    item.tabIndex = active ? 0 : -1;
   }
-  for (const panel of els.panels) panel.hidden = panel.id !== tab.getAttribute("aria-controls");
+  updateWatch();
 }
 
-function trapFocus(event) {
-  if (event.key !== "Tab" || !drawerIsOpen) return;
-  const focusable = Array.from(
-    els.drawer.querySelectorAll('a[href], button:not([disabled]), [tabindex="0"]')
-  ).filter((element) => element.offsetParent !== null);
-  if (!focusable.length) return;
-  const first = focusable[0];
-  const last = focusable[focusable.length - 1];
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault();
-    last.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first.focus();
+try {
+  const canvas = $("scene");
+  if (!canvas.getContext("2d")) throw new Error("Canvas unavailable");
+  scene = new WorldScene(canvas, { demo });
+  if ("ResizeObserver" in window) new ResizeObserver(() => {
+    scene.resize();
+    renderPages();
+  }).observe(canvas);
+} catch (error) {
+  $("canvas-fallback").hidden = false;
+}
+try { lowMotion = localStorage.getItem(motionKey) === "low"; } catch (error) { /* blocked storage */ }
+setLowMotion(lowMotion);
+$("motion-toggle").addEventListener("click", () => {
+  setLowMotion(!lowMotion);
+  try { localStorage.setItem(motionKey, lowMotion ? "low" : "auto"); } catch (error) { /* blocked storage */ }
+});
+$("demo-badge").hidden = !demo;
+if (demo) {
+  $("mode-link").href = "./";
+  $("mode-link").textContent = "실시간 보기";
+}
+$("project-filter").addEventListener("change", (event) => {
+  selected = event.target.value || null;
+  if (snapshot) render([], false);
+});
+$("drawer-open").addEventListener("click", () => {
+  $("drawer-close").hidden = false;
+  drawer.append(projectPanel);
+  drawer.showModal();
+});
+$("drawer-close").addEventListener("click", () => drawer.close());
+drawer.addEventListener("close", () => {
+  $("drawer-close").hidden = true;
+  projectHome.append(projectPanel);
+  if (mobile.matches) $("drawer-open").focus();
+});
+mobile.addEventListener("change", (event) => { if (!event.matches && drawer.open) drawer.close(); });
+watch.addEventListener("click", toggleWatch);
+document.addEventListener("fullscreenchange", updateWatch);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && theater.classList.contains("is-watch")) toggleWatch();
+});
+$("page-prev").addEventListener("click", () => { scene?.setPage(scene.page - 1); renderPages(); });
+$("page-next").addEventListener("click", () => { scene?.setPage(scene.page + 1); renderPages(); });
+$("retry").addEventListener("click", load);
+window.addEventListener("online", load);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    // The current snapshot refreshes animation state. Events accumulated
+    // while the tab was hidden remain readable in the activity feed.
+    resumed = true;
+    load();
   }
-}
-
-function wire() {
-  els.drawerOpen.addEventListener("click", openDrawer);
-  els.drawerClose.addEventListener("click", () => closeDrawer());
-  els.scrim.addEventListener("click", () => closeDrawer());
-  els.menuOpen.addEventListener("click", () => (menuIsOpen ? closeMenu(true) : openMenu()));
-  els.menu.addEventListener("click", (event) => {
-    const item = event.target.closest(".menu-item");
-    if (!item) return;
-    const action = item.dataset.action;
-    if (action === "help") {
-      closeMenu();
-      els.help.showModal();
-    } else if (action === "motion") {
-      setLowMotion(!getLowMotion());
-    } else if (action === "fullscreen") {
-      closeMenu();
-      toggleFullscreen();
-    } else {
-      closeMenu();
-    }
-  });
-  els.helpOpen.addEventListener("click", () => els.help.showModal());
-  els.help.addEventListener("click", (event) => {
-    if (event.target === els.help) els.help.close();
-  });
-  els.help.addEventListener("close", () => els.helpOpen.focus());
-  els.retry.addEventListener("click", () => {
-    els.error.hidden = true;
-    els.loading.hidden = false;
-    fetchState();
-  });
-  for (const tab of els.tabs) {
-    tab.addEventListener("click", () => selectTab(tab));
-    tab.addEventListener("keydown", (event) => {
-      const index = els.tabs.indexOf(tab);
-      let next = null;
-      if (event.key === "ArrowRight") next = els.tabs[(index + 1) % els.tabs.length];
-      if (event.key === "ArrowLeft") next = els.tabs[(index - 1 + els.tabs.length) % els.tabs.length];
-      if (event.key === "Home") next = els.tabs[0];
-      if (event.key === "End") next = els.tabs[els.tabs.length - 1];
-      if (next) {
-        event.preventDefault();
-        selectTab(next);
-        next.focus();
-      }
-    });
-  }
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-      if (menuIsOpen) {
-        event.preventDefault();
-        closeMenu(true);
-      } else if (drawerIsOpen) {
-        event.preventDefault();
-        closeDrawer();
-      }
-    }
-    trapFocus(event);
-  });
-  document.addEventListener("click", (event) => {
-    if (menuIsOpen && !els.menu.contains(event.target) && !els.menuOpen.contains(event.target)) {
-      closeMenu();
-    }
-  });
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
-      clearTimeout(pollTimer);
-    } else {
-      fetchState();
-    }
-  });
-  prefersReduced.addEventListener?.("change", () => {
-    setLowMotion(getLowMotion());
-  });
-  window.addEventListener("pagehide", () => clearTimeout(pollTimer));
-}
-
-function toggleFullscreen() {
-  if (document.fullscreenElement) {
-    document.exitFullscreen?.().catch(() => {});
-    return;
-  }
-  document.documentElement.requestFullscreen?.().catch(() => {
-    toast("이 브라우저에서는 전체 화면을 사용할 수 없습니다.");
-  });
-}
-
-function tick() {
-  if (document.hidden || !data) return;
-  const elapsed = Math.max(0, (performance.now() - baseAt) / 1000);
-  const live = baseRequests + liveRps * elapsed;
-  els.requests.textContent = compact(live);
-}
-
-function refreshTimes() {
-  if (document.hidden || !primed) return;
-  const now = serverNow + (Date.now() - receivedWall) / 1000;
-  for (const time of els.feedList.querySelectorAll("time")) {
-    time.textContent = ago(now - Number(time.dataset.at || 0));
-  }
-}
-
-function init() {
-  const lowMotion = getLowMotion();
-  document.documentElement.dataset.motion = lowMotion ? "low" : "auto";
-  scene = new WorldScene($("scene"), { lowMotion });
-  window.__scene = scene;
-  setLowMotion(lowMotion);
-  wire();
-  setSync("접속 중…");
-  fetchState();
-  setInterval(tick, 500);
-  setInterval(refreshTimes, 15000);
-}
-
-init();
+});
+setInterval(() => { if (!document.hidden) load(); }, pollInterval);
+load();

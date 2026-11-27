@@ -1,0 +1,28 @@
+[Unit]
+Description=Idle Ops GitHub reconciliation
+After=network-online.target hd2lab-idle-ops.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=hd2lab-idle-ops
+Group=www-data
+WorkingDirectory=/opt/hd2lab-idle-ops/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=IDLE_OPS_CONFIG=/etc/hd2lab/idle-ops-r3.json
+LoadCredential=github-token:/etc/hd2lab/idle-ops-github-token
+ExecStart=/usr/bin/python3 -m server.reconcile --db /var/lib/hd2lab-idle-ops/game.sqlite3 --token-file ${CREDENTIALS_DIRECTORY}/github-token
+TimeoutStartSec=6min
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/hd2lab-idle-ops
+MemoryMax=128M
+TasksMax=8
+LimitCORE=0

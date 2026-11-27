@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover - Windows fallback keeps threads safe.
 from . import economy
 
 OP_TTL_SECONDS = 30 * 86400
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 BACKUP_KEEP = 14
 BACKUP_KINDS = ("daily", "pre-deploy", "pre-hardreset", "pre-restore", "manual")
 MIN_FREE_BYTES = 256 * 1024 * 1024
@@ -229,7 +229,7 @@ def _read_events(con, since, until=None):
 
 
 class Store:
-    def __init__(self, path, backup_dir=None):
+    def __init__(self, path, backup_dir=None, initialize=True, preserve_legacy=False):
         self.path = os.fspath(path)
         parent = os.path.dirname(os.path.abspath(self.path))
         os.makedirs(parent, exist_ok=True)
@@ -242,7 +242,9 @@ class Store:
         self.gate = _WriteGate(self.path + ".world.lock")
         self.service_lock_path = self.path + ".service.lock"
         self._service_lock = None
-        with contextlib.closing(self._connect()) as con:
+        if not initialize:
+            return
+        with self.gate.exclusive(), contextlib.closing(self._connect()) as con:
             stored = int(con.execute("PRAGMA user_version").fetchone()[0])
             if stored > SCHEMA_VERSION:
                 raise SchemaTooNew(
@@ -318,11 +320,15 @@ class Store:
             ):
                 if name not in seen_columns:
                     con.execute(f"ALTER TABLE admin_seen ADD COLUMN {name} {ddl}")
-            con.execute("DELETE FROM action_ops WHERE created_at < ?", (self._now() - OP_TTL_SECONDS,))
-            con.execute("DELETE FROM world_ops WHERE created_at < ?", (self._now() - OP_TTL_SECONDS,))
-            if stored < SCHEMA_VERSION:
-                con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            if not preserve_legacy:
+                con.execute("DELETE FROM action_ops WHERE created_at < ?", (self._now() - OP_TTL_SECONDS,))
+                con.execute("DELETE FROM world_ops WHERE created_at < ?", (self._now() - OP_TTL_SECONDS,))
+            from . import telemetry, twin
+
             self._seed_world(con, self._now())
+            if stored < SCHEMA_VERSION:
+                con.executescript("BEGIN IMMEDIATE;\n" + twin.SCHEMA + telemetry.SCHEMA
+                                  + f"PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;")
 
     @staticmethod
     def _now():
@@ -507,6 +513,9 @@ class Store:
             try:
                 version = int(con.execute("PRAGMA user_version").fetchone()[0])
                 row = con.execute("SELECT state_json FROM world WHERE id = 1").fetchone()
+                from . import twin
+                tables = {entry[0] for entry in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                twin_ok = twin.REQUIRED_TABLES.keys() <= tables
             finally:
                 con.close()
             world_ok = False
@@ -519,7 +528,7 @@ class Store:
             backups = 0
             if os.path.isdir(self.backup_dir):
                 backups = sum(1 for name in os.listdir(self.backup_dir) if name.endswith(".sqlite3"))
-            schema_ok = version == SCHEMA_VERSION
+            schema_ok = version == SCHEMA_VERSION and twin_ok
             disk_ok = usage.free >= MIN_FREE_BYTES
             return {
                 "ok": world_ok and schema_ok and disk_ok,

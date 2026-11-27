@@ -1,5 +1,24 @@
 # 애니메이션 명세 — Idle Ops
 
+## R3 · Live animation
+
+R3 retains the following V3.1 manifest, timing and artwork. Live snapshots
+supply rack, agent and bug data. Idle is the default. Run bridges movement
+between authoritative events. Repair requires an explicit current agent/issue
+association. Attack plays for a fresh matching resolution, and defeat occurs
+at the manifest hit frame. Dismissal and reconnect use current state. LevelUp
+and Install use server level/tier changes. Reboot leaves unresolved bugs visible.
+Reduced motion draws the same authoritative entities with static poses.
+
+R3 caps visible actors at three bugs and four agents, with at most six queued
+confirmed encounters. Rack capacity is 3/5/7/9 by canvas width. Projects can be
+filtered and paged. Future polls, visibility returns and cursor discontinuities
+recover from snapshots without replaying old events.
+
+The Phase 2 state-machine and rack behavior below document the archived mode.
+Atlas timing, slicing, fallback, boundaries and the render architecture carry
+forward. See [R3 browser QA](R3_BROWSER_QA.md) for playback evidence.
+
 공개 화면의 Canvas 2D 캐릭터·연출 규격입니다. 구현 정본은
 [`static/public/assets/engine/`](../static/public/assets/engine)이며, 아트 납품 규격은
 [`ASSET_REQUIREMENTS_V3.md`](ASSET_REQUIREMENTS_V3.md)를 따릅니다(구

@@ -1,74 +1,35 @@
-// Server-room layout and painting: rack slots derived from real totals and a
-// cached static background so per-frame work stays small.
+// Server-room layout and painting. Each visible project owns one rack.
 
-import { TAU, TIERS, TIER_ORDER, formatCount } from "./config.js";
+import { TAU, TIERS } from "./config.js";
 import { roundRect, hexAlpha } from "./effects.js";
 
-export function layoutRacks({ width, height, floorY, counts }) {
-  const budget = width < 520 ? 3 : width < 760 ? 5 : width < 1080 ? 7 : 9;
-  const present = TIER_ORDER.filter((tier) => (counts[tier] || 0) > 0);
-  const slots = [];
-  if (!present.length) present.push("cache");
-  const priority = [...present].sort((a, b) => TIERS[b].priority - TIERS[a].priority);
-  for (const tier of priority) {
-    if (slots.length < budget) slots.push({ tier, index: 0 });
-    if (slots.length >= budget) break;
-  }
-  let next = 0;
-  while (slots.length < budget) {
-    const tier = present[next % present.length];
-    const used = slots.filter((slot) => slot.tier === tier).length;
-    if (used < TIERS[tier].cap) {
-      slots.push({ tier, index: used });
-    } else if (present.every((t) => slots.filter((slot) => slot.tier === t).length >= TIERS[t].cap)) {
-      break;
-    }
-    next += 1;
-  }
-  slots.sort((a, b) => TIERS[a.tier].priority - TIERS[b.tier].priority || a.index - b.index);
+export function rackBudget(width) {
+  return width < 520 ? 3 : width < 760 ? 5 : width < 1080 ? 7 : 9;
+}
 
-  const groups = {};
-  for (const tier of present) groups[tier] = slots.filter((slot) => slot.tier === tier).length;
-  const perGroup = {};
-  for (const tier of present) {
-    const total = counts[tier] || 1;
-    const n = groups[tier] || 1;
-    perGroup[tier] = [];
-    const base = Math.floor(total / n);
-    const extra = total % n;
-    for (let i = 0; i < n; i += 1) perGroup[tier].push(base + (i < extra ? 1 : 0));
-  }
+export function layoutProjectRacks({ width, height, floorY, projects }) {
+  const count = projects.length;
+  const gap = Math.min(20, width * 0.025);
+  const rackW = Math.max(14, Math.min(108, (width * 0.86 - gap * (count - 1)) / Math.max(1, count)));
+  const startX = (width - (rackW + gap) * (count - 1)) / 2;
+  return {
+    racks: projects.map((project, index) => {
+      const tier = projectTier(project);
+      const def = TIERS[tier];
+      return {
+        projectId: String(project.id),
+        label: project.name,
+        tier, def, x: startX + index * (rackW + gap), w: rackW,
+        h: Math.max(32, height * def.height), base: floorY + 2,
+        phase: index * 0.83, pulse: 0, installing: 0,
+      };
+    }),
+    emptySlot: count ? null : { x: width / 2, y: floorY, w: rackW },
+  };
+}
 
-  const count = slots.length;
-  const margin = width * (width < 640 ? 0.08 : 0.11);
-  const usable = width - margin * 2;
-  const maxW = width < 640 ? 78 : 108;
-  const gap = count > 1 ? Math.min(34, (usable - count * maxW) / (count - 1)) : 0;
-  const rackW = Math.min(maxW, count > 1 ? (usable - gap * (count - 1)) / count : maxW * 1.1);
-  const totalW = rackW * count + gap * Math.max(0, count - 1);
-  const startX = (width - totalW) / 2;
-
-  const racks = slots.map((slot, index) => {
-    const tier = TIERS[slot.tier];
-    return {
-      tier: slot.tier,
-      def: tier,
-      x: startX + index * (rackW + gap) + rackW / 2,
-      w: rackW,
-      h: height * tier.height,
-      base: floorY + 2 + (slot.index % 2) * 2,
-      total: counts[slot.tier] || 0,
-      groupCount: perGroup[slot.tier][slot.index] ?? counts[slot.tier] ?? 0,
-      phase: index * 0.83,
-      pulse: 0,
-      installing: 0,
-    };
-  });
-  let emptySlot = racks.length < budget
-    ? { x: startX + count * (rackW + gap) + rackW * 0.55, y: floorY, w: rackW * 0.9 }
-    : null;
-  if (emptySlot && emptySlot.x + emptySlot.w / 2 > width - 12) emptySlot = null;
-  return { racks, emptySlot, budget };
+export function projectTier(project) {
+  return Object.prototype.hasOwnProperty.call(TIERS, project.tier) ? project.tier : "cache";
 }
 
 export class RoomPainter {
@@ -263,7 +224,7 @@ export function drawRack(ctx, rack, time) {
     ctx.fill();
   }
 
-  const label = `${def.label} ×${formatCount(rack.groupCount)}`;
+  const label = rack.label || def.label;
   ctx.font = `700 ${Math.max(9, Math.round(w * 0.115))}px "Pretendard", system-ui, sans-serif`;
   const textW = ctx.measureText(label).width;
   const pillW = Math.min(w - 8, textW + 12);
@@ -277,13 +238,7 @@ export function drawRack(ctx, rack, time) {
   ctx.fillStyle = def.color;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(label, x, pillY + 7);
-
-  if (rack.total > rack.groupCount) {
-    ctx.font = `600 ${Math.max(8, Math.round(w * 0.1))}px system-ui, sans-serif`;
-    ctx.fillStyle = "rgba(200, 195, 235, 0.65)";
-    ctx.fillText(`전체 ${formatCount(rack.total)}`, x, base + 11);
-  }
+  ctx.fillText(label, x, pillY + 7, Math.max(1, pillW - 4));
 
   if (rack.installing > 0) {
     ctx.save();
@@ -311,7 +266,7 @@ export function drawEmptySlot(ctx, slot, width, height) {
   ctx.font = '600 10px system-ui, sans-serif';
   ctx.textAlign = "center";
   ctx.fillText("빈 슬롯", slot.x, slot.y - h / 2);
-  ctx.fillText("증설 대기", slot.x, slot.y - h / 2 + 13);
+  ctx.fillText("프로젝트 대기", slot.x, slot.y - h / 2 + 13);
   ctx.restore();
   return !(left < 8 || left + slot.w > width - 8);
 }

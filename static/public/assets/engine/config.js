@@ -3,16 +3,14 @@
 export const TAU = Math.PI * 2;
 export const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 export const rand = (min, max) => min + Math.random() * (max - min);
-export const pick = (list) => list[Math.floor(Math.random() * list.length)];
 
 export const TIERS = {
-  cache: { label: "캐시", color: "#6ee7f7", cap: 3, priority: 0, height: 0.105, units: 3 },
-  app: { label: "앱", color: "#7ef7b1", cap: 3, priority: 1, height: 0.135, units: 4 },
-  db: { label: "DB", color: "#ffd166", cap: 2, priority: 2, height: 0.17, units: 4 },
-  gpu: { label: "GPU", color: "#b58bff", cap: 2, priority: 3, height: 0.2, units: 5 },
-  quantum: { label: "양자", color: "#ff7ce5", cap: 1, priority: 4, height: 0.235, units: 5 },
+  cache: { label: "캐시", color: "#6ee7f7", height: 0.105, units: 3 },
+  app: { label: "앱", color: "#7ef7b1", height: 0.135, units: 4 },
+  db: { label: "DB", color: "#ffd166", height: 0.17, units: 4 },
+  gpu: { label: "GPU", color: "#b58bff", height: 0.2, units: 5 },
+  quantum: { label: "양자", color: "#ff7ce5", height: 0.235, units: 5 },
 };
-export const TIER_ORDER = ["cache", "app", "db", "gpu", "quantum"];
 
 export const BOX_COLORS = {
   heroGlow: "#8b6bff",
@@ -38,7 +36,6 @@ export const MOTION = {
   attackSeconds: 0.75,
   repairSeconds: 0.8,
   attackRange: 26,
-  bugSpawn: [6.5, 12.5],
   bugSpeed: [10, 34],
 };
 

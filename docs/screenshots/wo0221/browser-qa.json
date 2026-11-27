@@ -1,0 +1,739 @@
+{
+  "url": "http://127.0.0.1:8795/idle-ops/",
+  "desktop": {
+    "label": "desktop-1440",
+    "viewport": [
+      1440,
+      900
+    ],
+    "device_scale_factor": 1,
+    "fps": {
+      "rafFps": 56,
+      "sceneFps": 55
+    },
+    "cell": [
+      384,
+      384
+    ],
+    "problems": [],
+    "states": {
+      "idle": {
+        "kind": "atlas",
+        "frames": 8
+      },
+      "run": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "attack": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "repair": {
+        "kind": "atlas",
+        "frames": 8
+      },
+      "levelup": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "install": {
+        "kind": "atlas",
+        "frames": 12
+      }
+    },
+    "decoded_total_bytes": 42160256,
+    "decoded": [
+      {
+        "name": "hyangdani-run-v31-4x3.png",
+        "width": 1536,
+        "height": 1152,
+        "bytes": 7077888
+      },
+      {
+        "name": "hyangdani-attack-v31-4x3.png",
+        "width": 1536,
+        "height": 1152,
+        "bytes": 7077888
+      },
+      {
+        "name": "hyangdani-levelup-v31-4x3.png",
+        "width": 1536,
+        "height": 1152,
+        "bytes": 7077888
+      },
+      {
+        "name": "hyangdani-install-v31-4x3.png",
+        "width": 1536,
+        "height": 1152,
+        "bytes": 7077888
+      },
+      {
+        "name": "hyangdani-idle-v31-4x2.png",
+        "width": 1536,
+        "height": 768,
+        "bytes": 4718592
+      },
+      {
+        "name": "hyangdani-repair-v31-4x2.png",
+        "width": 1536,
+        "height": 768,
+        "bytes": 4718592
+      },
+      {
+        "name": "hyangdani-strike.png",
+        "width": 550,
+        "height": 640,
+        "bytes": 1408000
+      },
+      {
+        "name": "hyangdani-run.png",
+        "width": 498,
+        "height": 640,
+        "bytes": 1274880
+      },
+      {
+        "name": "hyangdani-idle.png",
+        "width": 379,
+        "height": 640,
+        "bytes": 970240
+      },
+      {
+        "name": "bug-alive.png",
+        "width": 318,
+        "height": 300,
+        "bytes": 381600
+      },
+      {
+        "name": "bug-hit.png",
+        "width": 314,
+        "height": 300,
+        "bytes": 376800
+      }
+    ],
+    "transfers": {
+      "": 8525,
+      "world.js": 23312,
+      "world.css": 22755,
+      "engine.js": 401,
+      "scene.js": 17535,
+      "animation.js": 3745,
+      "config.js": 1827,
+      "room.js": 11232,
+      "sprites.js": 21834,
+      "motion.js": 6313,
+      "effects.js": 4984,
+      "hyangdani-idle.png": 270097,
+      "manifest.json": 3295,
+      "state?since=0": 3565,
+      "bug-hit.png": 106672,
+      "bug-alive.png": 116469,
+      "hyangdani-idle-v31-4x2.png": 862325,
+      "hyangdani-run-v31-4x3.png": 338199,
+      "hyangdani-run.png": 324075,
+      "hyangdani-strike.png": 350194,
+      "hyangdani-attack-v31-4x3.png": 354911,
+      "hyangdani-levelup-v31-4x3.png": 289886,
+      "hyangdani-install-v31-4x3.png": 293764,
+      "hyangdani-repair-v31-4x2.png": 727177
+    },
+    "transfer_total": 4163092,
+    "canvas": {
+      "sampled": 35027,
+      "lit": 10453
+    },
+    "screenshots": [
+      "docs/screenshots/wo0221/desktop-1440-run-hero.png",
+      "docs/screenshots/wo0221/desktop-1440-attack-hero.png"
+    ],
+    "console_errors": []
+  },
+  "mobile": {
+    "label": "mobile-390",
+    "viewport": [
+      390,
+      844
+    ],
+    "device_scale_factor": 3,
+    "fps": {
+      "rafFps": 60,
+      "sceneFps": 60
+    },
+    "cell": [
+      384,
+      384
+    ],
+    "problems": [],
+    "states": {
+      "idle": {
+        "kind": "atlas",
+        "frames": 8
+      },
+      "run": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "attack": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "repair": {
+        "kind": "atlas",
+        "frames": 8
+      },
+      "levelup": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "install": {
+        "kind": "atlas",
+        "frames": 12
+      }
+    },
+    "decoded_total_bytes": 42160256,
+    "decoded": [
+      {
+        "name": "hyangdani-attack-v31-4x3.png",
+        "width": 1536,
+        "height": 1152,
+        "bytes": 7077888
+      },
+      {
+        "name": "hyangdani-run-v31-4x3.png",
+        "width": 1536,
+        "height": 1152,
+        "bytes": 7077888
+      },
+      {
+        "name": "hyangdani-install-v31-4x3.png",
+        "width": 1536,
+        "height": 1152,
+        "bytes": 7077888
+      },
+      {
+        "name": "hyangdani-levelup-v31-4x3.png",
+        "width": 1536,
+        "height": 1152,
+        "bytes": 7077888
+      },
+      {
+        "name": "hyangdani-idle-v31-4x2.png",
+        "width": 1536,
+        "height": 768,
+        "bytes": 4718592
+      },
+      {
+        "name": "hyangdani-repair-v31-4x2.png",
+        "width": 1536,
+        "height": 768,
+        "bytes": 4718592
+      },
+      {
+        "name": "hyangdani-strike.png",
+        "width": 550,
+        "height": 640,
+        "bytes": 1408000
+      },
+      {
+        "name": "hyangdani-run.png",
+        "width": 498,
+        "height": 640,
+        "bytes": 1274880
+      },
+      {
+        "name": "hyangdani-idle.png",
+        "width": 379,
+        "height": 640,
+        "bytes": 970240
+      },
+      {
+        "name": "bug-alive.png",
+        "width": 318,
+        "height": 300,
+        "bytes": 381600
+      },
+      {
+        "name": "bug-hit.png",
+        "width": 314,
+        "height": 300,
+        "bytes": 376800
+      }
+    ],
+    "transfers": {
+      "": 8525,
+      "world.js": 23312,
+      "world.css": 22755,
+      "engine.js": 401,
+      "config.js": 1827,
+      "scene.js": 17535,
+      "animation.js": 3745,
+      "room.js": 11232,
+      "motion.js": 6313,
+      "sprites.js": 21834,
+      "effects.js": 4984,
+      "hyangdani-idle.png": 270097,
+      "manifest.json": 3295,
+      "state?since=0": 3562,
+      "bug-alive.png": 116469,
+      "hyangdani-idle-v31-4x2.png": 862325,
+      "bug-hit.png": 106672,
+      "hyangdani-run.png": 324075,
+      "hyangdani-attack-v31-4x3.png": 354911,
+      "hyangdani-run-v31-4x3.png": 338199,
+      "hyangdani-install-v31-4x3.png": 293764,
+      "hyangdani-strike.png": 350194,
+      "hyangdani-levelup-v31-4x3.png": 289886,
+      "hyangdani-repair-v31-4x2.png": 727177
+    },
+    "transfer_total": 4163089,
+    "canvas": {
+      "sampled": 35584,
+      "lit": 8697
+    },
+    "screenshots": [
+      "docs/screenshots/wo0221/mobile-390-run-hero.png",
+      "docs/screenshots/wo0221/mobile-390-attack-hero.png"
+    ],
+    "console_errors": []
+  },
+  "desktop_768": {
+    "label": "desktop-1440-768",
+    "viewport": [
+      1440,
+      900
+    ],
+    "device_scale_factor": 1,
+    "fps": {
+      "rafFps": 40,
+      "sceneFps": 44
+    },
+    "cell": [
+      384,
+      384
+    ],
+    "problems": [],
+    "states": {
+      "idle": {
+        "kind": "atlas",
+        "frames": 8
+      },
+      "run": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "attack": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "repair": {
+        "kind": "atlas",
+        "frames": 8
+      },
+      "levelup": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "install": {
+        "kind": "atlas",
+        "frames": 12
+      }
+    },
+    "decoded_total_bytes": 155406464,
+    "decoded": [
+      {
+        "name": "hyangdani-run-v31-4x3.png",
+        "width": 3072,
+        "height": 2304,
+        "bytes": 28311552
+      },
+      {
+        "name": "hyangdani-attack-v31-4x3.png",
+        "width": 3072,
+        "height": 2304,
+        "bytes": 28311552
+      },
+      {
+        "name": "hyangdani-levelup-v31-4x3.png",
+        "width": 3072,
+        "height": 2304,
+        "bytes": 28311552
+      },
+      {
+        "name": "hyangdani-install-v31-4x3.png",
+        "width": 3072,
+        "height": 2304,
+        "bytes": 28311552
+      },
+      {
+        "name": "hyangdani-idle-v31-4x2.png",
+        "width": 3072,
+        "height": 1536,
+        "bytes": 18874368
+      },
+      {
+        "name": "hyangdani-repair-v31-4x2.png",
+        "width": 3072,
+        "height": 1536,
+        "bytes": 18874368
+      },
+      {
+        "name": "hyangdani-strike.png",
+        "width": 550,
+        "height": 640,
+        "bytes": 1408000
+      },
+      {
+        "name": "hyangdani-run.png",
+        "width": 498,
+        "height": 640,
+        "bytes": 1274880
+      },
+      {
+        "name": "hyangdani-idle.png",
+        "width": 379,
+        "height": 640,
+        "bytes": 970240
+      },
+      {
+        "name": "bug-alive.png",
+        "width": 318,
+        "height": 300,
+        "bytes": 381600
+      },
+      {
+        "name": "bug-hit.png",
+        "width": 314,
+        "height": 300,
+        "bytes": 376800
+      }
+    ],
+    "transfers": {
+      "": 8525,
+      "world.js": 23312,
+      "world.css": 22755,
+      "engine.js": 401,
+      "animation.js": 3745,
+      "scene.js": 17535,
+      "config.js": 1827,
+      "room.js": 11232,
+      "motion.js": 6313,
+      "sprites.js": 21834,
+      "effects.js": 4984,
+      "hyangdani-idle.png": 270097,
+      "state?since=0": 3562,
+      "manifest.json": 3295,
+      "bug-hit.png": 106672,
+      "bug-alive.png": 116469,
+      "hyangdani-idle-v31-4x2.png": 2556603,
+      "hyangdani-strike.png": 350194,
+      "hyangdani-run.png": 324075,
+      "hyangdani-run-v31-4x3.png": 4966343,
+      "hyangdani-attack-v31-4x3.png": 4516264,
+      "hyangdani-repair-v31-4x2.png": 2181238,
+      "hyangdani-levelup-v31-4x3.png": 3752708,
+      "hyangdani-install-v31-4x3.png": 3774436
+    },
+    "transfer_total": 23044419,
+    "canvas": {
+      "sampled": 35027,
+      "lit": 10452
+    },
+    "screenshots": [
+      "docs/screenshots/wo0221/desktop-1440-768-run-hero.png",
+      "docs/screenshots/wo0221/desktop-1440-768-attack-hero.png"
+    ],
+    "console_errors": []
+  },
+  "mobile_768": {
+    "label": "mobile-390-768",
+    "viewport": [
+      390,
+      844
+    ],
+    "device_scale_factor": 3,
+    "fps": {
+      "rafFps": 45,
+      "sceneFps": 55
+    },
+    "cell": [
+      384,
+      384
+    ],
+    "problems": [],
+    "states": {
+      "idle": {
+        "kind": "atlas",
+        "frames": 8
+      },
+      "run": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "attack": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "repair": {
+        "kind": "atlas",
+        "frames": 8
+      },
+      "levelup": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "install": {
+        "kind": "atlas",
+        "frames": 12
+      }
+    },
+    "decoded_total_bytes": 155406464,
+    "decoded": [
+      {
+        "name": "hyangdani-run-v31-4x3.png",
+        "width": 3072,
+        "height": 2304,
+        "bytes": 28311552
+      },
+      {
+        "name": "hyangdani-attack-v31-4x3.png",
+        "width": 3072,
+        "height": 2304,
+        "bytes": 28311552
+      },
+      {
+        "name": "hyangdani-levelup-v31-4x3.png",
+        "width": 3072,
+        "height": 2304,
+        "bytes": 28311552
+      },
+      {
+        "name": "hyangdani-install-v31-4x3.png",
+        "width": 3072,
+        "height": 2304,
+        "bytes": 28311552
+      },
+      {
+        "name": "hyangdani-idle-v31-4x2.png",
+        "width": 3072,
+        "height": 1536,
+        "bytes": 18874368
+      },
+      {
+        "name": "hyangdani-repair-v31-4x2.png",
+        "width": 3072,
+        "height": 1536,
+        "bytes": 18874368
+      },
+      {
+        "name": "hyangdani-strike.png",
+        "width": 550,
+        "height": 640,
+        "bytes": 1408000
+      },
+      {
+        "name": "hyangdani-run.png",
+        "width": 498,
+        "height": 640,
+        "bytes": 1274880
+      },
+      {
+        "name": "hyangdani-idle.png",
+        "width": 379,
+        "height": 640,
+        "bytes": 970240
+      },
+      {
+        "name": "bug-alive.png",
+        "width": 318,
+        "height": 300,
+        "bytes": 381600
+      },
+      {
+        "name": "bug-hit.png",
+        "width": 314,
+        "height": 300,
+        "bytes": 376800
+      }
+    ],
+    "transfers": {
+      "": 8525,
+      "world.js": 23312,
+      "world.css": 22755,
+      "engine.js": 401,
+      "scene.js": 17535,
+      "animation.js": 3745,
+      "config.js": 1827,
+      "room.js": 11232,
+      "effects.js": 4984,
+      "sprites.js": 21834,
+      "motion.js": 6313,
+      "hyangdani-idle.png": 270097,
+      "state?since=0": 3560,
+      "manifest.json": 3295,
+      "bug-hit.png": 106672,
+      "bug-alive.png": 116469,
+      "hyangdani-idle-v31-4x2.png": 2556603,
+      "hyangdani-strike.png": 350194,
+      "hyangdani-run.png": 324075,
+      "hyangdani-run-v31-4x3.png": 4966343,
+      "hyangdani-attack-v31-4x3.png": 4516264,
+      "hyangdani-repair-v31-4x2.png": 2181238,
+      "hyangdani-levelup-v31-4x3.png": 3752708,
+      "hyangdani-install-v31-4x3.png": 3774436
+    },
+    "transfer_total": 23044417,
+    "canvas": {
+      "sampled": 35584,
+      "lit": 8669
+    },
+    "screenshots": [
+      "docs/screenshots/wo0221/mobile-390-768-run-hero.png",
+      "docs/screenshots/wo0221/mobile-390-768-attack-hero.png"
+    ],
+    "console_errors": []
+  },
+  "fallback": {
+    "label": "desktop-1440-fallback",
+    "viewport": [
+      1440,
+      900
+    ],
+    "device_scale_factor": 1,
+    "fps": {
+      "rafFps": 50,
+      "sceneFps": 53
+    },
+    "cell": [
+      384,
+      384
+    ],
+    "problems": [],
+    "states": {
+      "idle": {
+        "kind": "atlas",
+        "frames": 8
+      },
+      "run": {
+        "kind": "fallback",
+        "frames": 1
+      },
+      "attack": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "repair": {
+        "kind": "atlas",
+        "frames": 8
+      },
+      "levelup": {
+        "kind": "atlas",
+        "frames": 12
+      },
+      "install": {
+        "kind": "atlas",
+        "frames": 12
+      }
+    },
+    "decoded_total_bytes": 35082368,
+    "decoded": [
+      {
+        "name": "hyangdani-attack-v31-4x3.png",
+        "width": 1536,
+        "height": 1152,
+        "bytes": 7077888
+      },
+      {
+        "name": "hyangdani-levelup-v31-4x3.png",
+        "width": 1536,
+        "height": 1152,
+        "bytes": 7077888
+      },
+      {
+        "name": "hyangdani-install-v31-4x3.png",
+        "width": 1536,
+        "height": 1152,
+        "bytes": 7077888
+      },
+      {
+        "name": "hyangdani-idle-v31-4x2.png",
+        "width": 1536,
+        "height": 768,
+        "bytes": 4718592
+      },
+      {
+        "name": "hyangdani-repair-v31-4x2.png",
+        "width": 1536,
+        "height": 768,
+        "bytes": 4718592
+      },
+      {
+        "name": "hyangdani-strike.png",
+        "width": 550,
+        "height": 640,
+        "bytes": 1408000
+      },
+      {
+        "name": "hyangdani-run.png",
+        "width": 498,
+        "height": 640,
+        "bytes": 1274880
+      },
+      {
+        "name": "hyangdani-idle.png",
+        "width": 379,
+        "height": 640,
+        "bytes": 970240
+      },
+      {
+        "name": "bug-alive.png",
+        "width": 318,
+        "height": 300,
+        "bytes": 381600
+      },
+      {
+        "name": "bug-hit.png",
+        "width": 314,
+        "height": 300,
+        "bytes": 376800
+      }
+    ],
+    "transfers": {
+      "": 8525,
+      "world.js": 23312,
+      "world.css": 22755,
+      "engine.js": 401,
+      "animation.js": 3745,
+      "config.js": 1827,
+      "scene.js": 17535,
+      "effects.js": 4984,
+      "motion.js": 6313,
+      "room.js": 11232,
+      "sprites.js": 21834,
+      "state?since=0": 3560,
+      "hyangdani-idle.png": 270097,
+      "manifest.json": 3295,
+      "hyangdani-idle-v31-4x2.png": 862325,
+      "bug-alive.png": 116469,
+      "bug-hit.png": 106672,
+      "hyangdani-run-v31-4x3.png": 0,
+      "hyangdani-attack-v31-4x3.png": 354911,
+      "hyangdani-strike.png": 350194,
+      "hyangdani-run.png": 324075,
+      "hyangdani-repair-v31-4x2.png": 727177,
+      "hyangdani-install-v31-4x3.png": 293764,
+      "hyangdani-levelup-v31-4x3.png": 289886
+    },
+    "transfer_total": 3824888,
+    "canvas": {
+      "sampled": 35027,
+      "lit": 10453
+    },
+    "screenshots": [
+      "docs/screenshots/wo0221/desktop-1440-fallback-run-hero.png",
+      "docs/screenshots/wo0221/desktop-1440-fallback-attack-hero.png"
+    ],
+    "console_errors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ]
+  }
+}

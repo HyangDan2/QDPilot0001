@@ -193,6 +193,35 @@ class StorageGate(GateTestCase):
 
 
 class AssetGate(unittest.TestCase):
+    # Every state is delivered as a v3 atlas: Stage 1 Idle 4x2, Stage 2 Run 4x3,
+    # Stage 3 Attack 4x3, Stage 4 Repair 4x2, Stage 5 LevelUp 4x3 and Stage 6
+    # Install 4x3. No state rides its single-image fallback any more.
+    # Phase 2.2.1 (WO-02): the browser loads a 384 px-cell service atlas for
+    # every state; the 768 px-cell authoring master is declared next to it in
+    # the manifest and must still exist on disk.
+    SERVICE_CELL = 384
+    AUTHORING_CELL = 768
+    DELIVERED_SOURCES = {
+        "idle": {"type": "atlas", "file": "hyangdani-idle-v31-4x2.png",
+                 "columns": 4, "rows": 2, "width": 1536, "height": 768},
+        "run": {"type": "atlas", "file": "hyangdani-run-v31-4x3.png",
+                "columns": 4, "rows": 3, "width": 1536, "height": 1152},
+        "attack": {"type": "atlas", "file": "hyangdani-attack-v31-4x3.png",
+                   "columns": 4, "rows": 3, "width": 1536, "height": 1152},
+        "repair": {"type": "atlas", "file": "hyangdani-repair-v31-4x2.png",
+                   "columns": 4, "rows": 2, "width": 1536, "height": 768},
+        "levelup": {"type": "atlas", "file": "hyangdani-levelup-v31-4x3.png",
+                    "columns": 4, "rows": 3, "width": 1536, "height": 1152},
+        "install": {"type": "atlas", "file": "hyangdani-install-v31-4x3.png",
+                    "columns": 4, "rows": 3, "width": 1536, "height": 1152},
+    }
+    # The atlases delivered before Phase 2.2.1 stay in the repository untouched.
+    LEGACY_ATLASES = (
+        "hyangdani-idle-v3-4x2.png", "hyangdani-run-v3-4x3.png", "hyangdani-attack-v3-4x3.png",
+        "hyangdani-repair-v3-4x2.png", "hyangdani-levelup-v3-4x3.png", "hyangdani-install-v3-4x3.png",
+    )
+    PENDING_STATES = ()
+
     def test_reg_15_manifest_is_v3_right_facing_with_attack_hit(self):
         manifest = json.loads(
             (ROOT / "static/public/assets/sprites/manifest.json").read_text(encoding="utf-8")
@@ -200,9 +229,75 @@ class AssetGate(unittest.TestCase):
         self.assertEqual(manifest["version"], 3)
         self.assertEqual(manifest["facing"], "right")
         self.assertEqual(manifest["states"]["attack"]["hits"], [{"frame": 6, "type": "strike"}])
-        for state in manifest["states"].values():
-            self.assertIsNone(state["source"])
+        for name, state in manifest["states"].items():
+            if name in self.DELIVERED_SOURCES:
+                self.assertEqual(state["source"], self.DELIVERED_SOURCES[name], name)
+            else:
+                self.assertIsNone(state["source"], f"{name} has no final art yet")
             self.assertEqual(state["fallback"]["facing"], "right")
+        # Stage 4 delivered repair (8F, 10 fps, 0.8 s, looping), Stage 5 the
+        # level-up celebration (12F, 12 fps, 1.0 s, one-shot) and Stage 6 the
+        # install setup (12F, 12 fps, 1.0 s, one-shot); every state is drawn.
+        self.assertEqual(manifest["states"]["repair"]["loop"], True)
+        self.assertEqual(manifest["states"]["repair"]["fps"], 10)
+        self.assertEqual(manifest["states"]["repair"]["seconds"], 0.8)
+        self.assertEqual(manifest["states"]["levelup"]["frames"], 12)
+        self.assertEqual(manifest["states"]["levelup"]["loop"], False)
+        self.assertEqual(manifest["states"]["levelup"]["fps"], 12)
+        self.assertEqual(manifest["states"]["levelup"]["seconds"], 1.0)
+        self.assertEqual(manifest["states"]["install"]["frames"], 12)
+        self.assertEqual(manifest["states"]["install"]["loop"], False)
+        self.assertEqual(manifest["states"]["install"]["fps"], 12)
+        self.assertEqual(manifest["states"]["install"]["seconds"], 1.0)
+        for name in self.PENDING_STATES:
+            self.assertIsNone(manifest["states"][name]["source"], name)
+
+    def test_reg_15b_delivered_atlas_matches_manifest_geometry(self):
+        manifest = json.loads(
+            (ROOT / "static/public/assets/sprites/manifest.json").read_text(encoding="utf-8")
+        )
+        sprites = ROOT / "static/public/assets/sprites"
+        self.assertEqual(manifest["cell"], [self.SERVICE_CELL, self.SERVICE_CELL])
+        self.assertEqual(manifest["authoring"]["cell"], [self.AUTHORING_CELL, self.AUTHORING_CELL])
+        for name, source in self.DELIVERED_SOURCES.items():
+            state = manifest["states"][name]
+            self.assertEqual(state["source"], source)
+            data = (sprites / source["file"]).read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n", name)
+            self.assertEqual(data[12:16], b"IHDR")
+            width = int.from_bytes(data[16:20], "big")
+            height = int.from_bytes(data[20:24], "big")
+            depth, colour = data[24], data[25]
+            self.assertEqual((width, height), (source["width"], source["height"]), name)
+            self.assertLessEqual(max(width, height), manifest["maxTexture"])
+            # Service exports may be palette PNGs (alpha still present), the
+            # authoring masters are PNG-32.
+            self.assertIn(colour, (3, 6), f"{name} must keep an alpha channel")
+            self.assertEqual(depth, 8, name)
+            columns, rows = source["columns"], source["rows"]
+            self.assertEqual(columns * rows, state["frames"])
+            self.assertEqual(width // columns, self.SERVICE_CELL)
+            self.assertEqual(height // rows, self.SERVICE_CELL)
+            self.assertEqual(width % columns, 0)
+            self.assertEqual(height % rows, 0)
+            # WO-02 budget: the file the browser downloads stays <= 1 MiB.
+            self.assertLessEqual(len(data), 1024 * 1024, f"{name} service atlas over 1 MiB")
+            # The 768 master is declared per state and still on disk.
+            authoring = state["authoring"]
+            master = ROOT / authoring["file"]
+            self.assertTrue(master.is_file(), f"{name} authoring master missing")
+            mdata = master.read_bytes()
+            mwidth = int.from_bytes(mdata[16:20], "big")
+            mheight = int.from_bytes(mdata[20:24], "big")
+            self.assertEqual((mwidth, mheight), (authoring["width"], authoring["height"]), name)
+            self.assertEqual((mwidth, mheight), (columns * self.AUTHORING_CELL,
+                                                 rows * self.AUTHORING_CELL), name)
+            self.assertEqual((mdata[24], mdata[25]), (8, 6), f"{name} master must be PNG-32")
+
+    def test_reg_15c_legacy_v3_atlases_are_preserved(self):
+        sprites = ROOT / "static/public/assets/sprites"
+        for legacy in self.LEGACY_ATLASES:
+            self.assertTrue((sprites / legacy).is_file(), f"{legacy} was deleted")
 
     def test_reg_16_fallback_assets_exist_and_are_png(self):
         sprites = ROOT / "static/public/assets/sprites"

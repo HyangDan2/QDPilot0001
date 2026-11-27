@@ -1,8 +1,20 @@
 # 에셋 요구사항 v3 — Idle Ops
 
-Phase 2.1(WO-08) 기준 신규 아트 납품 규격입니다. 이 문서가 현재 정본이며
+Phase 2.1(WO-08) 기준 신규 아트 납품 규격이며, **Phase 2.2.1(WO-02)에서 2단 해상도
+납품으로 확장**했습니다. 이 문서가 현재 정본이며
 [`ASSET_REQUIREMENTS.md`](ASSET_REQUIREMENTS.md)는 v2 시점 기록으로 남깁니다.
 캐릭터 카논·팔레트는 [`ART_DIRECTION.md`](ART_DIRECTION.md)를 따릅니다.
+
+> **2단 해상도 요약 (Phase 2.2.1)**
+>
+> | 구분 | 셀 | 아틀라스(8F / 12F) | 위치 | 브라우저 요청 |
+> | --- | --- | --- | --- | --- |
+> | 제작 원본(authoring) | **768×768** | 3072×1536 / 3072×2304 | `art/hyangdani/export/…`(신규 아트) 또는 기존 `sprites/hyangdani-<state>-v3-…png` | 아니오 |
+> | 서비스(service) | **384×384** | 1536×768 / 1536×1152 | `static/public/assets/sprites/hyangdani-<state>-v31-…png` | 예 |
+>
+> 파일명은 `<state>.png`가 아니라 `hyangdani-<state>-v31-<cols>x<rows>.png`입니다.
+> 상태당 서비스 아틀라스는 **1 MiB 이하**이며, 넘으면 같은 그림을 256색 팔레트로
+> 재인코딩합니다(`tools/build_sprite_atlases.py`).
 
 ## 1. 원칙
 
@@ -123,11 +135,14 @@ Phase 2.1(WO-08) 기준 신규 아트 납품 규격입니다. 이 문서가 현�
 
 ### 4.4 서비스 해상도와 모바일
 
-- 제작 기준은 768이지만 런타임 표시 높이는 최대 300 CSS px입니다. 대역폭이 중요한
-  배포에서는 384×384 셀 아틀라스나 320×640 스트립을 **별도 export**로 만들 수
-  있습니다. 엔진은 픽셀 크기와 무관하게 같은 앵커 규격으로 그립니다.
-- 자동 기기별 manifest 전환은 구현되어 있지 않습니다. 필요하면 PO 승인 후 별도 WO로
-  다룹니다.
+- 제작 기준은 768이지만 런타임 표시 높이는 최대 300 CSS px입니다. 그래서 브라우저가
+  받는 서비스 아틀라스는 **384×384 셀**로 별도 export 합니다(Phase 2.2.1).
+- 제작 원본(768)은 저장소에 보존하고 브라우저에는 내보내지 않습니다. manifest가
+  두 해상도를 모두 선언합니다(5장 `authoring`, `cell`).
+- 서비스 export는 제작 원본을 LANCZOS로 정확히 절반 축소한 같은 그림이어야 합니다
+  (`tests/test_sprite_assets.py`가 PSNR 30 dB 이상을 검사).
+- 자동 기기별 manifest 전환(저사양 분기)은 구현하지 않았습니다. 필요하면 PO 승인 후
+  별도 WO로 다룹니다.
 
 ## 5. Manifest v3 스키마
 
@@ -140,7 +155,8 @@ Phase 2.1(WO-08) 기준 신규 아트 납품 규격입니다. 이 문서가 현�
 | `anchor` | 아니오 | 기본 `[0.5, 1.0]` |
 | `facing` | 아니오 | 기본 방향 `"right"`(현행 원본 기준). 상태가 덮어쓸 수 있음 |
 | `maxTexture` | 아니오 | 기본 4096, 256 이상 |
-| `cell` | 아니오 | 제작 셀 크기(문서용), 기본 `[768, 768]` |
+| `cell` | 아니오 | **서비스** 셀 크기, 기본 `[768, 768]` (현행 `[384, 384]`) |
+| `authoring` | 아니오 | `{cell: [768, 768], note}` — 제작 캔버스 선언(문서·테스트용) |
 | `states` | 예 | `idle`·`run`·`attack`·`repair`·`levelup`·`install` |
 | `bugs` | 아니오 | `alive`/`hit` 각각 문자열 또는 `{file, facing}` |
 
@@ -157,18 +173,21 @@ Phase 2.1(WO-08) 기준 신규 아트 납품 규격입니다. 이 문서가 현�
 | `anchor` | `[x, y]`, (없으면 최상위) |
 | `anchors` | 프레임별 `[x, y]` 배열(길이 = frames) |
 | `hits` | `[{ "frame": 6, "type": "strike" }]` 또는 숫자 배열. 0-index |
-| `source` | `strip`/`atlas`/`sequence` 객체 또는 `null`(미납품) |
+| `source` | `strip`/`atlas`/`sequence` 객체 또는 `null`(미납품) — 용량은 서비스 파일 기준 |
+| `authoring` | `{file, width, height}` — 768 제작 원본 경로·크기. 엔진은 무시하고 테스트만 검증 |
 | `fallback` | 문자열 또는 `{file, facing}`. 소스 실패 시 사용 |
 
-예시(현행 attack):
+예시(현행 run):
 
 ```json
-"attack": {
-  "frames": 12, "fps": 16, "loop": false, "seconds": 0.75,
+"run": {
+  "frames": 12, "fps": 12, "loop": true, "seconds": 1.0,
   "facing": "right",
-  "hits": [{ "frame": 6, "type": "strike" }],
-  "source": { "type": "atlas", "file": "hyangdani-attack-4x3.png", "columns": 4, "rows": 3 },
-  "fallback": { "file": "hyangdani-strike.png", "facing": "right" }
+  "authoring": { "file": "art/hyangdani/export/run-v31/hyangdani-run-v31-4x3-768.png",
+                 "width": 3072, "height": 2304 },
+  "source": { "type": "atlas", "file": "hyangdani-run-v31-4x3.png",
+              "columns": 4, "rows": 3, "width": 1536, "height": 1152 },
+  "fallback": { "file": "hyangdani-run.png", "facing": "right" }
 }
 ```
 
@@ -212,34 +231,51 @@ v2 manifest는 그대로 로드되지만, 신규 납품은 v3로 작성합니다
 
 ## 9. 납품 절차
 
-1. `art/hyangdani/export/`(또는 `art/bugs/export/`)에 프레임을 둡니다.
-2. 상태 하나 단위로 `static/public/assets/sprites/`에 **새 파일명**으로 복사합니다.
-3. `sprites/manifest.json`에서 해당 상태의 `source`(와 필요 시 `facing`/`anchors`/
-   `durations`/`hits`)만 채웁니다. fallback은 유지합니다.
-4. `node --test tests/js/sprite_manifest.test.mjs`로 정규화·슬라이스 검증을 통과시킵니다.
-5. `python3 tools/wo08_facing_shots.py --url <로컬 공개 주소>`로 좌/우 캡처를 확인합니다.
-6. 320/390/768/1440/1920 폭에서 잘림·앵커·FPS(`?fps=1`)를 확인합니다.
-7. `source`를 다시 `null`로 되돌렸을 때 기존 fallback으로 복구되는지 확인합니다.
-8. 한 상태씩 커밋합니다.
+1. 제작 원본(768 셀 아틀라스 또는 프레임 묶음)을 ZIP 또는 디렉터리로 넘깁니다.
+2. `python3 tools/import_phase22_atlas.py --state <state> --bundle <경로> --check`로
+   규격(정확한 그리드·PNG-32·빈 프레임/중복/셀 경계·프레임 수)을 먼저 검사합니다.
+3. `--check` 없이 실행하면 제작 원본을 `art/hyangdani/export/<state>-v31/`에,
+   서비스 아틀라스를 `static/public/assets/sprites/`에 **새 파일명**으로 쓰고 해당
+   상태의 `authoring`·`source`만 갱신합니다(다른 상태·fallback·facing 유지).
+4. 기존 파일을 다른 픽셀로 덮어쓰지 않습니다(충돌 시 거부).
+5. `python3 tools/build_sprite_atlases.py --check`로 커밋된 서비스 아틀라스가 제작
+   원본과 일치하는지 확인합니다.
+6. `python3 tools/wo0221_asset_audit.py`로 무결성(프레임 수·알파·중복·셀 경계·접지점·
+   앵커·attack 히트 자세)을 검사합니다.
+7. `node --test tests/js/sprite_manifest.test.mjs`·`python3 -m unittest discover -s tests -t .`를
+   통과시킵니다.
+8. `python3 tools/wo0221_previews.py`(GIF·프레임 시트)와
+   `python3 tools/wo0221_browser_qa.py --url <로컬 공개 주소>`(PC/모바일 실화면·FPS·
+   전송량·디코드 메모리·fallback)로 확인합니다.
+9. 한 상태씩 커밋합니다.
 
 ### 검수 체크리스트
 
-- [ ] 프레임 캔버스 768×768, 모든 프레임 동일
+- [ ] 제작 원본 프레임 캔버스 768×768, 모든 프레임 동일
 - [ ] 아틀라스 columns/rows·크기가 4.2 표와 일치, 4096 이하, 셀 균등 분할
+- [ ] 서비스 아틀라스는 정확히 절반(384 셀)이고 상태당 1 MiB 이하
 - [ ] 프레임 수·FPS·길이가 3장 표와 일치, attack 히트 프레임 6
-- [ ] 발 접지점이 앵커와 일치(프레임별 앵커는 `anchors`로 선언)
+- [ ] 발 접지점이 앵커와 일치(프레임별 앵커는 `anchors`로 선언), 접지선 오차 1% 이내
 - [ ] 상태 시작/끝 프레임이 루프에 자연스럽거나 원샷 정지 자세
 - [ ] 원본 방향이 `facing`과 일치(향단이 `right`, 버그 `left`)
 - [ ] 투명 배경, 그림자·텍스트·프레임 번호 없음
 - [ ] 320 CSS px 폭에서 실루엣이 읽힘
-- [ ] 파일명이 `hyangdani-<state>-…` 규칙을 따르고 기존 파일을 덮어쓰지 않음
+- [ ] 파일명이 `hyangdani-<state>-v31-…` 규칙을 따르고 기존 파일을 덮어쓰지 않음
+- [ ] `source`를 `null`로 되돌렸을 때 기존 fallback으로 복구
 
 ## 10. 현재 상태와 미결
 
-- 최종 아트는 **미납품**입니다. manifest의 모든 `source`는 `null`이며 기존 fallback
-  PNG로 렌더링합니다. 개발팀이 대체 아트를 생성하지 않습니다.
+- 6개 상태 모두 서비스 아틀라스(384 셀)를 납품했습니다(Phase 2.2.1). Run은 같은
+  단계에서 **12F 사이클을 교정**했습니다(좌우 발 교대·착지·체중 이동·공기/관성·
+  루프 이음매) — 근거는
+  [`art/hyangdani/export/run-v31/PROMPTS.md`](../art/hyangdani/export/run-v31/PROMPTS.md),
+  측정은 [`QA_REPORT.md`](../QA_REPORT.md)에 있습니다.
+- v3(768 셀) 아틀라스 6장은 삭제하지 않고 저장소에 남아 있습니다. 브라우저는 더 이상
+  요청하지 않으므로, 저장소·배포 용량을 줄이려면 5장의 v3 파일을 웹 루트 밖으로
+  옮기는 별도 승인이 필요합니다.
 - 버그 시트(다중 프레임)는 엔진이 `bugs.<state>.frames`를 읽도록 되어 있으나 현재
   단일 이미지 1프레임으로 동작합니다.
 - 공격 히트 시점은 manifest의 `hits`로 계산됩니다. fallback 단일 이미지에서도 같은
   시점(기본 0.375s)에 이펙트가 발생합니다.
 - 768 제작 + 12프레임 가로 스트립은 4096 제한을 넘으므로 아틀라스/시퀀스를 권장합니다.
+- Raspberry Pi 실기 측정은 여전히 미수행입니다(Phase 2.2.1은 로컬 Chromium 측정만).

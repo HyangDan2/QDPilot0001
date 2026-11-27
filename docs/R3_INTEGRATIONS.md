@@ -53,12 +53,22 @@ Adding a tracked branch seeds its first tip without back pay. Later observations
 compare immutable SHAs, deduplicate repository/SHA pairs and atomically commit
 before advancing tips. Merge commits and commits whose GitHub committer date is
 at or before the project baseline are observed without XP. Branch rewinds do
-not make an existing SHA eligible again. Counts in the UI are distinct observed
-records since tracking began, including baseline records collected by the
-corresponding endpoint. They are sampled history and can differ from GitHub's
-lifetime totals. A CI ref/app check, workflow or job has its own identity.
+not make an existing SHA eligible again. The dashboard shows the latest tracked-tip commit date, last development
+activity and the latest observation time. The collector uses GitHub source
+timestamps. It seeds all open issues/PRs and changes from the last 30 days,
+then polls updates incrementally. PR merged counts accumulate only verified
+merges in this observed set. A closed PR without `merged_at` is omitted from
+both Open and Merged. Open tasks are issues without a qualifying bug label.
+
+Labels are case-insensitive. `critical`, `P0`, `critical/P0`, `priority: P0`
+and `severity: critical` map to Critical, followed by Regression and Bug in
+priority order. A CI ref/app check, workflow or job has its own identity.
 External checks on an ambiguous shared SHA require a matching branch.
-GitHub Actions workflows and jobs are collected via Actions read endpoints.
+The current CI counters use the latest observed statuses on tracked branch
+tips. Running requires `in_progress`. Passing and failure outcomes require
+a completed record. Queued and neutral records stay outside those counters.
+A running retry leaves any matching prior failure in the unresolved-bug
+count until GitHub verifies a corresponding success.
 
 ## Webhook and remote agents
 
@@ -71,7 +81,7 @@ project projections. A local relay using the same restricted socket can
 submit deliveries. The existing public and admin proxies leave the internal
 paths unexposed. The public GitHub service therefore needs an approved relay
 to reach webhook ingress. Periodic REST collection works with the installed
-route architecture.
+route architecture. External webhook delivery is backlogged and is optional for initial operation.
 
 `POST /internal/idle-ops/v1/telemetry` uses its own bearer verifier and accepts
 only versioned observations from configured scopes. A remote operator can
@@ -106,12 +116,43 @@ References [GitHub commit comparison](https://docs.github.com/en/rest/commits/co
 
 ## Release and rollback
 
-Follow Server-HQ's Idle Ops deployment and backup procedure after release
-approval. Prepare the v0/v4 pre-deploy DB snapshot with the R3 backup CLI
-and verify it before replacing the release. Copy the existing role/route config
-unchanged. The optional collector service and timer are under `deploy/`. Set the
-same `IDLE_OPS_CONFIG` for the existing web unit. Install credentials outside
-the repository under service-only access. Validate both units and readiness,
-the SSO-backed admin mutations, and the public read-only route before enabling
-the collector. Activate adapters against their individual scopes. See
-[Migration and rollback](DB_MIGRATION.md#r3-database-migration-and-rollback).
+Follow Server-HQ's Idle Ops deployment procedure once the Overlord approves
+cutover. The first release uses the REST collector and the installed SSO and
+read-only Nginx routes.
+
+1. Prepare the timestamped release from the reviewed commit. Record the existing
+   `current` symlink target, web-unit configuration, and original timer state.
+   Prepare service-readable registry and repository-scoped read credentials.
+   Stage the collector unit and timer from `deploy/` without enabling the timer.
+   Keep all secrets and game archives outside the release and document root.
+2. At cutover, stop any collector timer and in-flight collector, then stop the
+   web unit so the verified pre-deploy archive captures all writes. From the
+   candidate release, run the backup command as the service account. Save the
+   returned path and verify the archive before changing the symlink.
+
+   ```sh
+   sudo -u hd2lab-idle-ops python3 -m server.backup create \
+     --db /var/lib/hd2lab-idle-ops/game.sqlite3 --kind pre-deploy
+   sudo -u hd2lab-idle-ops python3 -m server.backup verify "$pre_deploy_archive"
+   ```
+
+3. Switch the symlink to the staged release, configure `IDLE_OPS_CONFIG` for the
+   web unit and start it. Check UDS readiness and HTTPS public reads and write
+   rejection. With real SSO accounts, confirm anonymous admin rejection,
+   granted admiral and Chairman access, and missing-grant rejection. Confirm
+   CSRF handling through the existing gateway with a repository sync request.
+   Use the Reboot eligibility display to verify state without resetting
+   live project progress.
+4. Start one collector unit run. Confirm the registered project receives a
+   fresh REST observation and the new-repository baseline awards zero XP.
+   Enable `hd2lab-idle-ops-collector.timer` after the run succeeds. Confirm a
+   scheduled observation, source status and last-observed time in the UI.
+5. To roll back, stop the timer, collector and web unit. Run
+   `python3 -m server.backup restore --db /var/lib/hd2lab-idle-ops/game.sqlite3
+   --file "$pre_deploy_archive"` from the candidate release as the service
+   account. Preserve the generated pre-restore archive. Repoint `current` to
+   the recorded release, restore the original web-unit configuration and timer
+   state, then verify readiness, the original public view and admin SSO.
+
+See [Migration and rollback](DB_MIGRATION.md#r3-database-migration-and-rollback)
+for the schema and restore contract.

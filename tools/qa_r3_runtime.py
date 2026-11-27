@@ -56,7 +56,7 @@ def run(scratch, seconds, viewers):
         con.execute("UPDATE twin_projects SET public_verified=1,observed_at=?", (now,))
         for repo in service.projects:
             for number in range(24):
-                twin.signal(con, repo, (f"issue:{number}", "issue", "open", now, 0), now, False)
+                twin.signal(con, repo, (f"issue:{number}", "bug", "open", now, 0), now, False)
     with (scratch / "service-stderr").open("wb") as log:
         child = subprocess.Popen([sys.executable, "-m", "server", "--db", str(db), "--uds", str(uds),
                                   "--static-root", "static", "--public-root", "static/public"],

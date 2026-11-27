@@ -10,9 +10,11 @@ SQLite read transaction.
 | `version` | Integer `1` for this contract. R3 replaces the previous economy payload. |
 | `revision`, `cursor` | Snapshot revision and latest event ID. Admin and public use separate cursor and revision sequences. |
 | `cursorReset`, `eventGap` | Reset after restore/truncation, or bounded event window. Use snapshots to recover, skip historical effects. |
-| `projects[]` | `id`, `name`, `level`, `tier`, `xp`, `runCommits`, `bonusBps`, `reboots`, `rebootEligible`, `rebootRequired`, `stats`, `bugs`, `bugCount`, `observedAt`, `stale`. |
-| `stats` | Counts of observed `commits`, `pulls`, `issues`, `ci` identities and `releases`. |
-| `bugs[]` | Up to 24 active `{id,kind}` records per project, with the full open count in `bugCount`. Kinds are `issue` and `ci`. |
+| `world` | `xp`, `level`, `levelXp`, `levelXpRequired`. Sum of lifetime XP from all projects in the audience, across dashboard filters. Public includes approved public repositories and admin includes all registered repositories. |
+| `projects[]` | `id`, `name`, `level`, `tier`, `xp`, `runCommits`, `bonusBps`, `reboots`, `rebootEligible`, `rebootRequired`, `stats`, `development`, `bugs`, `bugCount`, `observedAt`, `stale`. |
+| `stats` | Historical counts of distinct observed `commits`, `pulls`, `issues`, `ci` identities and `releases`. |
+| `development` | Null until the first corrected REST observation. Otherwise `lastCommitAt`, `lastActivityAt`, `lastActivityKind`, `openTasks`, `pulls.{open,merged}`, `ci.{running,passed,failed}`. Timestamps use GitHub source times, in Unix seconds. CI counts use the latest observed identities on the tracked tips. `pulls.merged` counts observed records with a verified merge timestamp. |
+| `bugs[]` | Up to 24 active `{id,kind}` records per project, with the full open count in `bugCount`. Kinds are `issue` and `ci`. Issue bugs include `classification` set to `bug`, `regression` or `critical`. |
 | `agents[]` | Pseudonymous `id`, `projectId`, `status`, nullable `progress`, `observedAt`, `stale`, `lastStatus`, optional `bugId`. Admin adds `name` and `taskId`. |
 | `events[]` | Bounded, ordered `id`, `type`, `projectId`, `at` and optional `entityId`, `agentId`, `level`, `tier`. |
 | `updatedAt`, `serverTime` | Most recent visible GitHub observation or null, and server timestamp. Unix seconds. |
@@ -23,8 +25,7 @@ page changes, gaps and visibility resumes consume state without replaying prior
 effects. Event types are `commit`, `pull`, `release`, `install`, `levelup`, `reboot`, `bug_opened`,
 `bug_resolved`, `bug_dismissed` and `agent`. GitHub-authoritative closures
 actually marked completed and matched CI successes generate `bug_resolved`.
-Non-resolution closures generate `bug_dismissed`. New open/reopened issues and
-CI failures generate `bug_opened`. Events omit messages, raw GitHub identifiers,
+Non-resolution closures and loss of the last qualifying label generate `bug_dismissed`. Newly classified or reopened bugs and CI failures generate `bug_opened`. Events omit messages, raw GitHub identifiers,
 branches, payloads, users and credentials.
 
 SSO applies to the following admin API operations. Calls from the browser

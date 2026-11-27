@@ -4,9 +4,12 @@
 
 - Each allowlisted repository becomes one logical rack. The level increases with
   Commit XP. Automatic rack tiers unlock at levels 1, 5, 10, 20 and 40.
-- An open observed GitHub issue or verified CI failure appears as a real tracked
-  bug. Only a completed issue closure or matched CI success triggers defeat.
-  Dismissal clears the sprite without a defeat. A reopened issue can appear again.
+- An open GitHub issue labeled `bug`, `regression`, `critical` or `P0`, or a
+  verified CI failure, appears as a tracked bug. General tasks and enhancements
+  stay in development status. Removing the final qualifying label dismisses the
+  bug. Reopening or adding a qualifying label restores the same entity.
+- A completed bug issue or a matching CI success triggers defeat. An active CI
+  rerun retains the unresolved bug until a corresponding success arrives.
 - Agent status reflects explicit observations. Repair appears only when a current
   observation explicitly names an active GitHub issue for the same project.
   GitHub confirms the resolution separately.
@@ -14,6 +17,8 @@
   observation times and an event feed. Rack and entity caps preserve the full
   project/bug totals in the dashboard. The mobile drawer and fullscreen mode
   share the same live data.
+- World XP is the sum of visible project XP. The main HUD shows the shared level
+  and progress to the next one across project filters.
 - Reboot is the manual progression action. Repository sync is an administrative
   integration action with no reward of its own. Fictional room visuals and
   synthetic demo activity are labeled.

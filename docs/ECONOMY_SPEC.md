@@ -7,7 +7,8 @@
 | First observation | Zero XP, including projects migrated from Phase 2. |
 | Eligible commit | Verified reachable commit, added after baseline, with at most one parent. Each repository/SHA pays once. |
 | Award | 10 XP multiplied by the current project bonus. At 1.1×, a new commit awards 11 XP. |
-| Level | `1 + floor(xp / 100)`. |
+| Project Level | `1 + floor(project XP / 100)`. |
+| World XP and Level | Sum of the audience's project XP. The same level curve applies, with 100 XP per level and the remainder shown toward the next level. |
 | Automatic tier | Cache at level 1; App 5; DB 10; GPU 20; Quantum 40. |
 | Reboot | Requires 100 eligible commits since the last reboot. Resets the run counter and adds +0.1× for future awards, capped at 2×. |
 | Retained on reboot | Lifetime XP, tier, ledger, issue and CI state, and prior awards. |

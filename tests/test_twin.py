@@ -54,6 +54,10 @@ class Source:
         if "/git/ref/heads/" in path:
             return {"ref": "refs/heads/" + path.split("/git/ref/heads/")[1],
                     "object": {"sha": self.head if path.endswith("/main") else OTHER}}, False
+        if "/git/commits/" in path:
+            identifier = path.rsplit("/", 1)[-1]
+            commit = next((item["commit"] for item in self.commits if item["sha"] == identifier), None)
+            return {"sha": identifier, **(commit or {"committer": {"date": iso(NOW - 1)}})}, False
         if "/compare/" in path:
             return {"status": "behind"}, False
         return {"id": self.repo, "private": self.private, "visibility": "private" if self.private else "public"}, False
@@ -139,7 +143,7 @@ class TwinTest(unittest.TestCase):
         self.assertEqual(github.collect(self.service, 1, self.source, NOW + 101)["xp"], 0)
 
     def test_issues_stale_close_dismiss_reopen_and_resolution(self):
-        issue = {"id": 88, "title": "never-serialize", "state": "open", "updated_at": iso(NOW)}
+        issue = {"id": 88, "title": "never-serialize", "labels": [{"name": "bug"}], "state": "open", "updated_at": iso(NOW)}
         self.source.issues = [issue]
         github.collect(self.service, 1, self.source, NOW)
         payload = self.service.snapshot(public=True, now=NOW)
@@ -162,7 +166,7 @@ class TwinTest(unittest.TestCase):
 
     def test_ci_success_matches_ref_source_identity_and_time(self):
         github.collect(self.service, 1, self.source, NOW)
-        self.source.checks = [{"app": {"id": 11}, "name": "compile", "head_sha": MAIN,
+        self.source.checks = [{"app": {"id": 11}, "name": "compile", "head_sha": MAIN, "status": "completed",
                                "conclusion": "failure", "completed_at": iso(NOW + 5), "id": 11}]
         github.collect(self.service, 1, self.source, NOW + 6)
         with self.service.transaction() as con:
@@ -202,6 +206,105 @@ class TwinTest(unittest.TestCase):
         github.collect(self.service, 1, self.source, NOW + 4)
         self.assertEqual(self.service.snapshot(public=True)["projects"][0]["bugCount"], 0)
 
+    def test_issue_label_changes_and_reopen(self):
+        labels = lambda *names: [{"name": name} for name in names]
+        issue = {"id": 11, "state": "open", "updated_at": iso(NOW), "labels": labels("enhancement")}
+        regression = dict(issue, id=12, labels=labels(" Regression ", "bug"))
+        critical = dict(issue, id=13, labels=labels("Priority: P0", "regression"))
+        self.source.issues = [issue, regression, critical]
+        github.collect(self.service, 1, self.source, NOW)
+        project = lambda: self.service.snapshot(public=True)["projects"][0]
+        self.assertEqual(project()["development"]["openTasks"], 1)
+        self.assertEqual({bug["classification"] for bug in project()["bugs"]}, {"regression", "critical"})
+        self.assertEqual(project()["stats"]["issues"], 3)
+        self.assertEqual(project()["bugCount"], 2)
+
+        issue["labels"] = labels(" BUG ")
+        github.collect(self.service, 1, self.source, NOW + 1)
+        self.assertEqual(project()["bugCount"], 3)
+        self.assertEqual(project()["development"]["openTasks"], 0)
+        bug_id = twin.opaque("bug", 1, "issue:11")
+        issue.update(labels=labels("enhancement"), updated_at=iso(NOW + 2))
+        github.collect(self.service, 1, self.source, NOW + 2)
+        issue.update(state="closed", state_reason="completed", updated_at=iso(NOW + 3))
+        github.collect(self.service, 1, self.source, NOW + 3)
+        issue.update(state="open", labels=labels("critical/P0"), updated_at=iso(NOW + 4))
+        github.collect(self.service, 1, self.source, NOW + 4)
+        payload = self.service.snapshot(public=True)
+        self.assertEqual([(event["type"], event["entityId"]) for event in payload["events"]],
+                         [(kind, bug_id) for kind in ("bug_opened", "bug_dismissed", "bug_opened")])
+        self.assertEqual(project()["bugCount"], 3)
+
+    def test_development_status_uses_git_sources_and_current_ci(self):
+        normal = {"id": 1, "state": "open", "updated_at": iso(NOW - 1)}
+        self.source.issues = [
+            normal, dict(normal, id=2, pull_request={"merged_at": None}),
+            dict(normal, id=3, state="closed", pull_request={"merged_at": iso(NOW - 1)}),
+            dict(normal, id=4, state="closed", merged=True, pull_request={}),
+        ]
+        check = {"name": "build", "head_sha": MAIN, "id": 1, "app": {"id": 3},
+                 "status": "completed", "conclusion": "failure", "completed_at": iso(NOW - 1)}
+        self.source.checks = [check, dict(check, name="queue", id=2, status="queued", conclusion=None)]
+        github.collect(self.service, 1, self.source, NOW)
+        project = lambda: self.service.snapshot(public=True, now=NOW + 700)["projects"][0]
+        self.assertEqual(project()["development"], {
+            "lastCommitAt": NOW - 1, "lastActivityAt": NOW - 1, "lastActivityKind": "commit",
+            "openTasks": 1, "pulls": {"open": 1, "merged": 1},
+            "ci": {"running": 0, "passed": 0, "failed": 1},
+        })
+        self.source.checks = [dict(check, id=3, status="in_progress", conclusion=None, started_at=iso(NOW + 3))]
+        github.collect(self.service, 1, self.source, NOW + 5)
+        self.assertEqual(project()["development"]["ci"], {"running": 1, "passed": 0, "failed": 0})
+        self.assertEqual(project()["bugCount"], 1)
+        self.assertEqual(project()["development"]["lastActivityAt"], NOW + 3)
+        self.assertEqual(project()["development"]["lastActivityKind"], "ci")
+        self.assertTrue(project()["stale"])
+        self.assertEqual(project()["observedAt"], NOW + 5)
+        self.source.checks = [dict(check, id=3, conclusion="success", completed_at=iso(NOW + 6))]
+        github.collect(self.service, 1, self.source, NOW + 7)
+        self.assertEqual(project()["development"]["ci"], {"running": 0, "passed": 1, "failed": 0})
+        self.assertEqual(project()["bugCount"], 0)
+        self.source.checks = []
+        github.collect(self.service, 1, self.source, NOW + 8)
+        self.assertEqual(project()["development"]["ci"], {"running": 0, "passed": 0, "failed": 0})
+        self.assertEqual(project()["development"]["lastActivityAt"], NOW + 6)
+
+    def test_world_progress_aggregates_visible_xp_and_reboot_leaves_it_intact(self):
+        with self.service.transaction(write=True) as con:
+            con.execute("UPDATE twin_projects SET xp=1090, run_commits=100, public_verified=1 WHERE repo=1")
+            con.execute("UPDATE twin_projects SET xp=45 WHERE repo=2")
+        world = lambda public=False: self.service.snapshot(public=public)["world"]
+        self.assertEqual(world(), {"xp": 1135, "level": 12, "levelXp": 35, "levelXpRequired": 100})
+        self.assertEqual(world(public=True), {"xp": 1090, "level": 11, "levelXp": 90, "levelXpRequired": 100})
+        result = self.service.reboot(self.public_id, "world-reboot", "admin")
+        self.assertEqual(result["world"], world())
+        self.assertEqual(result["projects"][0]["xp"], 1090)
+        self.assertEqual(result["projects"][0]["level"], 11)
+        self.assertEqual(result["projects"][0]["bonusBps"], 11000)
+        self.assertEqual(result["projects"][0]["runCommits"], 0)
+        self.assertEqual(twin.demo_snapshot(now=NOW)["world"]["xp"], 420)
+
+    def test_v5_migration_preserves_xp_and_requires_verified_labels(self):
+        with self.service.transaction(write=True) as con:
+            con.execute("UPDATE twin_projects SET xp=155, baseline_at=?, observed_at=?, public_verified=1 WHERE repo=1",
+                        (NOW - 1, NOW))
+            twin.signal(con, 1, ("issue:22", "issue", "open", NOW, 0), NOW, False)
+            con.execute("DROP TABLE twin_development")
+            con.execute("PRAGMA user_version=5")
+        self.assertTrue(backup.verify_database(self.path)["ok"])
+        migrated = twin.Twin(Store(self.path, preserve_legacy=True), self.projects)
+        before = migrated.snapshot(public=True)["projects"][0]
+        self.assertEqual(before["xp"], 155)
+        self.assertEqual(before["bugCount"], 0)
+        self.assertIsNone(before["development"])
+        self.source.issues = [{"id": 22, "state": "open", "labels": [{"name": "bug"}], "updated_at": iso(NOW)}]
+        github.collect(migrated, 1, self.source, NOW + 1)
+        after = migrated.snapshot(public=True)
+        self.assertEqual(after["projects"][0]["bugCount"], 1)
+        self.assertEqual(after["events"], [])
+        self.assertEqual(after["world"]["xp"], 155)
+        self.assertTrue(backup.verify_database(self.path)["ok"])
+
     def test_public_project_agent_redaction_and_private_cursor(self):
         github.collect(self.service, 1, self.source, NOW)
         current = self.service.snapshot(public=True, now=NOW)
@@ -210,7 +313,7 @@ class TwinTest(unittest.TestCase):
         with self.service.transaction(write=True) as con:
             twin.emit(con, 2, NOW, "commit")
         self.assertEqual(self.service.snapshot(public=True, now=NOW), current)
-        self.source.issues = [{"id": 44, "state": "open", "updated_at": iso(NOW + 1)}]
+        self.source.issues = [{"id": 44, "state": "open", "labels": [{"name": "bug"}], "updated_at": iso(NOW + 1)}]
         github.collect(self.service, 1, self.source, NOW + 1)
         self.service.ingest_agent({
             "version": 1, "agent_id": "private-agent", "repository_id": 1,

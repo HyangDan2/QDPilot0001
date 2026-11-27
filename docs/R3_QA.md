@@ -43,3 +43,28 @@ would be separate from the periodic REST rollout. Adapter documentation covers
 published Codex, Qoder and Antigravity hooks plus a scoped Supervisor publisher.
 Native hooks and a live Supervisor feed remain unverified. No deployed service,
 proxy configuration, production SQLite data or main branch was changed.
+
+## Closure correction · FIX-01–03
+
+Supervisor review target `070aacc63e28cd8176ba60d95bb96221d1a54cd1`.
+The existing R3 QA above is accepted evidence. The closure was checked with
+focused tests only.
+
+| Change | Executed evidence |
+| --- | --- |
+| FIX-01 | Label normalization and precedence, ordinary enhancement exclusion, same-second label change, relabel and reopen, dismissal without defeat, verified resolution, matched CI and issue-linked telemetry. |
+| FIX-02 | PR Open and verified Merged, unmerged closure exclusion, actual tracked-tip commit timestamp, last source activity, current running/failed/passed CI and observation freshness. A running CI retry retained the original unresolved bug. Actual GitHub REST returned two open PRs and separate commit/activity timestamps in a fresh QA DB. |
+| FIX-03 | Audience-scoped World XP aggregation, level and next-level remainder, continued project Level/Reboot behavior and unchanged lifetime XP at Reboot. Chrome at 1440px and 320px rendered the HUD, source timestamps and status breakdown. Project filtering left world progress intact; the mobile drawer had no horizontal overflow. |
+| Migration | v0 backup, migration and restore exercised for v6. A v5 fixture retained stored XP and legacy issue records, and gained a bug only after GitHub label confirmation. |
+
+Ten focused Python tests passed across the changed paths. The updated
+REST projection was exercised against the public repository. Desktop and mobile
+Chrome checks exercised the changed HUD and metrics with the isolated demo.
+The prior full suite, soak, native art playback and admin SSO simulation were
+reused. No production backup, login, timer activation or deployment was run.
+
+Initial rollout uses the existing REST collector. External GitHub webhook relay,
+daily/weekly statistics, Qoder and Antigravity native-hook verification, live
+Supervisor telemetry and long-duration stability remain backlog items. The
+production backup, SSO, collector activation and rollback sequence is prepared
+in the [operator checklist](R3_INTEGRATIONS.md#release-and-rollback).

@@ -9,7 +9,7 @@ const motionKey = "idle-ops-motion";
 const pollInterval = 8000;
 const feedLimit = 40;
 const formatter = new Intl.NumberFormat("ko-KR");
-const statFields = { commits: "커밋", pulls: "PR", ci: "CI 검사", releases: "릴리스", issues: "이슈" };
+const activityLabels = { commit: "커밋", issue: "이슈", pull: "PR", ci: "CI", release: "릴리스" };
 const eventLabels = {
   commit: "커밋 반영", levelup: "레벨 상승", install: "랙 설치", reboot: "Reboot",
   bug_opened: "버그 감지", bug_resolved: "버그 해결", bug_dismissed: "버그 닫힘",
@@ -49,7 +49,10 @@ function age(at) {
 function timeNode(at) {
   const time = node("time", age(at));
   const date = new Date(at * 1000);
-  if (at && Number.isFinite(date.getTime())) time.dateTime = date.toISOString();
+  if (at && Number.isFinite(date.getTime())) {
+    time.dateTime = date.toISOString();
+    time.title = date.toLocaleString("ko-KR");
+  }
   return time;
 }
 
@@ -110,12 +113,30 @@ function renderProjectPanel(projects) {
   }
   summary.append(observation);
   const metrics = node("dl", undefined, "project-stats");
-  const totals = Object.fromEntries(Object.keys(statFields).map((key) => [
-    key, projects.reduce((sum, item) => sum + (item.stats?.[key] ?? 0), 0),
-  ]));
-  const entries = Object.entries(statFields).map(([key, label]) => [label, totals[key]]);
-  entries.push(["미해결 버그", projects.reduce((sum, item) => sum + (item.bugCount ?? item.bugs?.length ?? 0), 0)]);
-  if (project) entries.push(["게임 XP", project.xp]);
+  const observed = projects.map((item) => item.development);
+  const latest = (field) => observed.reduce((recent, entry) =>
+    (entry?.[field] ?? 0) > (recent?.[field] ?? 0) ? entry : recent, null);
+  const activity = latest("lastActivityAt");
+  const activityDetails = node("div", undefined, "project-activity");
+  const commitTime = node("p", "최근 커밋 · ");
+  commitTime.append(timeNode(latest("lastCommitAt")?.lastCommitAt));
+  const activityTime = node("p", "마지막 개발 활동 · ");
+  if (activityLabels[activity?.lastActivityKind]) activityTime.append(activityLabels[activity.lastActivityKind], " · ");
+  activityTime.append(timeNode(activity?.lastActivityAt));
+  activityDetails.append(commitTime, activityTime);
+  summary.append(activityDetails);
+  const sumObserved = (value) => observed.every(Boolean)
+    ? observed.reduce((sum, item) => sum + value(item), 0) : null;
+  const entries = [
+    ["PR 열림", sumObserved((item) => item.pulls.open)],
+    ["PR 병합 (관측)", sumObserved((item) => item.pulls.merged)],
+    ["열린 개발 작업", sumObserved((item) => item.openTasks)],
+    ["CI 실행 중", sumObserved((item) => item.ci.running)],
+    ["CI 통과", sumObserved((item) => item.ci.passed)],
+    ["CI 실패", sumObserved((item) => item.ci.failed)],
+    ["미해결 버그", observed.every(Boolean) ? projects.reduce((sum, item) => sum + item.bugCount, 0) : null],
+  ];
+  if (project) entries.push(["프로젝트 XP", project.xp]);
   for (const [label, value] of entries) {
     const metric = node("div");
     metric.append(node("dt", label), node("dd", Number.isFinite(value) ? formatter.format(value) : "–"));
@@ -179,7 +200,19 @@ function renderPages() {
   $("page-next").disabled = page >= pages - 1;
 }
 
+function renderWorldHud(world) {
+  $("world-hud").hidden = !world;
+  if (!world) return;
+  $("world-level").textContent = `월드 Lv ${formatter.format(world.level)}`;
+  const progress = $("world-progress");
+  progress.max = world.levelXpRequired;
+  progress.value = world.levelXp;
+  $("world-xp").textContent = `${formatter.format(world.levelXp)} / ${formatter.format(world.levelXpRequired)} XP`;
+  $("world-hud").title = `누적 월드 XP ${formatter.format(world.xp)}`;
+}
+
 function render(events, animate) {
+  renderWorldHud(snapshot.world);
   if (selected !== null && !snapshot.projects.some((item) => String(item.id) === selected)) selected = null;
   const projects = snapshot.projects.filter((item) => selected === null || String(item.id) === selected);
   const names = new Map(snapshot.projects.map((item) => [String(item.id), item.name]));

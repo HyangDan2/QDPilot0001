@@ -45,7 +45,7 @@ if step == "initial":
         for repo, xp in enumerate((1200, 650, 2200, 180, 4100, 710, 130, 370, 100), 1):
             con.execute("UPDATE twin_projects SET public_verified=?, observed_at=?, xp=?, commit_count=? WHERE repo=?",
                         (int(repo < 9), now - (730 if repo == 8 else 0), xp, xp // 10, repo))
-        for repo, key, kind in ((1, "issue:123", "issue"), (2, "ci:qa", "ci"), (9, "issue:456", "issue")):
+        for repo, key, kind in ((1, "issue:123", "bug"), (2, "ci:qa", "ci"), (9, "issue:456", "bug")):
             signal(con, repo, (key, kind, "open", now, 0), now, True)
         for key, kind, status in (("pull:77", "pull", "closed"), ("release:11", "release", "published")):
             signal(con, 1, (key, kind, status, now, 0), now, False)
@@ -61,7 +61,7 @@ if step == "initial":
         twin.ingest_agent(payload, telemetry.Scope(agent, frozenset({1})), now - age)
 else:
     with twin.transaction(write=True) as con:
-        signal(con, 1, ("issue:123", "issue", "resolved", now, 0), now, True)
+        signal(con, 1, ("issue:123", "bug", "resolved", now, 0), now, True)
         con.execute("UPDATE twin_projects SET xp=2300, observed_at=? WHERE repo=1", (now,))
         emit(con, 1, now, "install", level=24, tier="gpu")
         emit(con, 1, now, "levelup", level=24, tier="gpu")

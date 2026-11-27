@@ -69,6 +69,20 @@ a, button, select { -webkit-tap-highlight-color: transparent; }
 .quiet:hover { border-color: var(--accent); }
 .quiet:disabled { cursor: default; opacity: .55; }
 #drawer-open { display: none; }
+.world-hud {
+  display: grid;
+  grid-template-columns: auto minmax(32px, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 17px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.world-hud strong { color: var(--accent); }
+.world-hud progress { width: 100%; height: 8px; accent-color: var(--accent); }
+.world-hud span { font-family: var(--mono); text-align: right; }
+.project-activity { display: grid; gap: 3px; font-size: 12px; }
+.project-activity time { color: var(--text); }
 .viewport { position: relative; min-height: 0; height: clamp(360px, 47vw, 590px); background: #0c0c17; }
 #scene { display: block; width: 100%; height: 100%; }
 .room-counts {

@@ -195,46 +195,70 @@ def changed_commits(client, path, refs, previous, baseline):
     return commits
 
 
-def issue_items(client, path, observed):
-    params = {"state": "all", "sort": "updated", "direction": "desc"}
+def issue_kind(labels):
+    names = {re.sub(r"\s*:\s*", ":", label["name"].strip().casefold()) for label in labels}
+    if names & {"critical", "p0", "critical/p0", "priority:p0", "severity:critical"}:
+        return "critical"
+    if "regression" in names:
+        return "regression"
+    return "bug" if "bug" in names else "issue"
+
+
+def issue_items(client, path, observed, now):
+    params = {"sort": "updated", "direction": "desc"}
     if observed is None:
-        params["state"] = "open"
-    else:
-        params["since"] = datetime.fromtimestamp(max(0, observed - 120), timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ")
-    for item in client.pages(path + "/issues", params=params):
+        # Include old open work as well as explicitly merged PRs in the recent window.
+        yield from read_issues(client.pages(path + "/issues", params={**params, "state": "open"}))
+    since = (now - 30 * 86400) if observed is None else (observed - 120)
+    params.update(state="all", since=datetime.fromtimestamp(max(0, since), timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"))
+    yield from read_issues(client.pages(path + "/issues", params=params))
+
+
+def read_issues(items):
+    for item in items:
         identifier = item["id"]
         updated = stamp(item.get("updated_at"))
-        if "pull_request" in item:
-            yield (f"pull:{identifier}", "pull", item["state"], updated, 0)
+        pull = item.get("pull_request")
+        if pull is not None:
+            merged = pull.get("merged_at")
+            if merged is not None:
+                stamp(merged)
+            yield (f"pull:{identifier}", "pull", "merged" if merged is not None else item["state"], updated, 0)
         else:
-            status = "open" if item.get("state") == "open" else (
+            status = "open" if item["state"] == "open" else (
                 "resolved" if item.get("state_reason") == "completed" else "dismissed")
-            # Reconciliation reads the current authoritative issue record, so
-            # a current reopen can supersede a close in the same second.
-            yield (f"issue:{identifier}", "issue", status, updated, 0)
+            yield (f"issue:{identifier}", issue_kind(item.get("labels", [])), status, updated, 0)
 
 
-def ci_state(conclusion):
-    if conclusion == "success":
-        return "resolved"
-    if conclusion in FAILURES:
-        return "open"
+def ci_state(item):
+    if item.get("status") == "in_progress":
+        return "running"
+    if item.get("status") == "completed":
+        conclusion = item.get("conclusion")
+        if conclusion == "success":
+            return "resolved"
+        if conclusion in FAILURES:
+            return "open"
     return None
+
+
+def ci_stamp(item, state):
+    return stamp(item.get("started_at") if state == "running" else item.get("completed_at"))
 
 
 def ci_items(client, path, refs):
     for ref, head in refs.items():
         for item in client.pages(path + f"/commits/{head}/check-runs", key="check_runs",
                                  params={"filter": "latest"}):
-            state = ci_state(item.get("conclusion"))
+            state = ci_state(item)
             app_id = item.get("app", {}).get("id") if item.get("app") else None
             branch = (item.get("check_suite") or {}).get("head_branch")
             unambiguous = list(refs.values()).count(head) == 1 if branch is None else branch == ref
             if (state and app_id and unambiguous and item["app"].get("slug") != "github-actions"
                     and item.get("head_sha") == head):
                 key = twin.opaque("check", ref, app_id, item["name"])
-                yield (key, "ci", state, stamp(item.get("completed_at")), item["id"])
+                yield (key, "ci", state, ci_stamp(item, state), item["id"])
         workflows = {}
         for item in client.pages(path + "/actions/runs", key="workflow_runs",
                                  params={"branch": ref, "head_sha": head, "event": "push"}):
@@ -248,18 +272,18 @@ def ci_items(client, path, refs):
             ):
                 workflows[item["workflow_id"]] = item
         for workflow, item in workflows.items():
-            if item.get("status") != "completed":
+            if item.get("status") not in ("in_progress", "completed"):
                 continue
-            state = ci_state(item.get("conclusion"))
+            state = ci_state(item)
             if state:
                 yield (twin.opaque("workflow", ref, workflow), "ci", state,
                        stamp(item.get("updated_at")), item["id"])
             for job in client.pages(path + f"/actions/runs/{item['id']}/attempts/{item['run_attempt']}/jobs",
                                     key="jobs"):
-                state = ci_state(job.get("conclusion"))
-                if state and job.get("status") == "completed":
+                state = ci_state(job)
+                if state:
                     yield (twin.opaque("job", ref, workflow, job["name"]), "ci", state,
-                           stamp(job.get("completed_at")), job["id"])
+                           ci_stamp(job, state), job["id"])
 
 
 def collect(twin_store, repo, client, now=None):
@@ -270,6 +294,7 @@ def collect(twin_store, repo, client, now=None):
     with twin_store.transaction() as con:
         prior = con.execute("SELECT * FROM twin_projects WHERE repo=?", (repo,)).fetchone()
         previous = dict(con.execute("SELECT ref,sha FROM twin_refs WHERE repo=?", (repo,)))
+        activity = con.execute("SELECT * FROM twin_development WHERE repo=?", (repo,)).fetchone()
     if prior["retry_at"] > now:
         raise Deferred(prior["retry_at"])
 
@@ -285,8 +310,25 @@ def collect(twin_store, repo, client, now=None):
         refs = branch_heads(client, path, config["refs"])
         baseline = prior["baseline_at"]
         commits = changed_commits(client, path, refs, previous, baseline) if baseline is not None else {}
-        issues = list(issue_items(client, path, prior["observed_at"]))
-        ci = list(ci_items(client, path, refs))
+        commit_at = activity["commit_at"] if activity else None
+        if activity is None or refs != previous:
+            dates = []
+            for tip in set(refs.values()):
+                commit, _ = client.get(path + "/git/commits/" + tip)
+                if commit.get("sha") != tip:
+                    raise CollectionError("GitHub returned a different tracked commit")
+                dates.append(stamp(commit.get("committer", {}).get("date")))
+            commit_at = max(dates)
+
+        issues = list(issue_items(client, path, prior["observed_at"] if activity else None, now))
+        ci = {}
+        for observation in ci_items(client, path, refs):
+            key = observation[0]
+            if key not in ci or observation[3:] >= ci[key][3:]:
+                ci[key] = observation
+        ci_signals = [item for item in ci.values() if item[2] != "running"]
+        ci_counts = {state: sum(item[2] == state for item in ci.values())
+                     for state in ("running", "resolved", "open")}
         releases = [(f"release:{item['id']}", "release", "observed", stamp(item.get("published_at")), 0)
                     for item in client.pages(path + "/releases")
                     if not item.get("draft") and item.get("published_at")]
@@ -335,8 +377,21 @@ def collect(twin_store, repo, client, now=None):
         """, (baseline, now, xp, earned, count, prior["requested"], repo))
         con.execute("DELETE FROM twin_refs WHERE repo=?", (repo,))
         con.executemany("INSERT INTO twin_refs VALUES(?,?,?)", ((repo, ref, value) for ref, value in refs.items()))
-        for item in issues + ci + releases:
-            twin.signal(con, repo, item, now, prior["observed_at"] is not None)
+        for item in issues + ci_signals + releases:
+            twin.signal(con, repo, item, now, activity is not None)
+        observed_activity = [(commit_at, "commit")]
+        observed_activity.extend((item[3], "issue" if item[1] in twin.BUG_CLASSES else item[1])
+                                 for item in issues + list(ci.values()) + releases)
+        if activity and activity["activity_at"] is not None:
+            observed_activity.insert(0, (activity["activity_at"], activity["activity_kind"]))
+        activity_at, activity_kind = max(observed_activity, key=lambda item: item[0])
+        con.execute("""
+            INSERT INTO twin_development VALUES(?,?,?,?,?,?,?)
+            ON CONFLICT(repo) DO UPDATE SET commit_at=excluded.commit_at,
+                activity_at=excluded.activity_at, activity_kind=excluded.activity_kind,
+                ci_running=excluded.ci_running, ci_passed=excluded.ci_passed, ci_failed=excluded.ci_failed
+        """, (repo, commit_at, activity_at, activity_kind, ci_counts["running"],
+              ci_counts["resolved"], ci_counts["open"]))
         if count:
             twin.emit(con, repo, now, "commit")
         if earned:

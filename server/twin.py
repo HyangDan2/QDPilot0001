@@ -9,12 +9,16 @@ import time
 from . import telemetry
 
 XP_PER_COMMIT = 10
+XP_PER_LEVEL = 100
 REBOOT_COMMITS = 100
 REBOOT_STEP = 1000
 MAX_BONUS = 20000
 STALE_SECONDS = 600
 MAX_PROJECTS = 40
 MAX_BUGS = 24
+BUG_CLASSES = ("bug", "regression", "critical")
+BUG_KINDS = (*BUG_CLASSES, "ci")
+BUG_KIND_SQL = ",".join("?" for _ in BUG_KINDS)
 EVENT_LIMIT = 60
 EVENT_RETENTION = 1200
 
@@ -59,6 +63,17 @@ CREATE TABLE IF NOT EXISTS twin_deliveries (
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS twin_deliveries_received ON twin_deliveries(received);
 """
+
+DEVELOPMENT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS twin_development (
+    repo INTEGER PRIMARY KEY, commit_at REAL, activity_at REAL, activity_kind TEXT,
+    ci_running INTEGER NOT NULL, ci_passed INTEGER NOT NULL, ci_failed INTEGER NOT NULL
+);
+"""
+DEVELOPMENT_TABLES = {
+    "twin_development": {"repo", "commit_at", "activity_at", "activity_kind",
+                         "ci_running", "ci_passed", "ci_failed"},
+}
 
 REQUIRED_TABLES = {
     **telemetry.REQUIRED_TABLES,
@@ -121,10 +136,16 @@ def registry(raw):
 
 
 def level_tier(xp):
-    level = 1 + xp // 100
+    level = 1 + xp // XP_PER_LEVEL
     return level, next(tier for threshold, tier in (
         (40, "quantum"), (20, "gpu"), (10, "db"), (5, "app"), (1, "cache")
     ) if level >= threshold)
+
+
+def world_progress(projects):
+    xp = sum(project["xp"] for project in projects)
+    return {"xp": xp, "level": 1 + xp // XP_PER_LEVEL, "levelXp": xp % XP_PER_LEVEL,
+            "levelXpRequired": XP_PER_LEVEL}
 
 
 def bonus(reboots):
@@ -155,29 +176,32 @@ def prune(con):
 
 def signal(con, repo, item, now, animate):
     key, kind, status, stamp, ordinal = item
-    old = con.execute("SELECT status,updated,ordinal FROM twin_signals WHERE repo=? AND key=?",
+    old = con.execute("SELECT kind,status,updated,ordinal FROM twin_signals WHERE repo=? AND key=?",
                       (repo, key)).fetchone()
     # Source timestamps come from GitHub. A stable id or lifecycle priority
     # breaks ties when timestamps only have whole-second precision.
     if old:
         if (stamp, ordinal) < (old["updated"], old["ordinal"]):
             return
-        if (stamp, ordinal, status) == (old["updated"], old["ordinal"], old["status"]):
+        if (stamp, ordinal, status, kind) == (old["updated"], old["ordinal"], old["status"], old["kind"]):
             return
     con.execute("""
         INSERT INTO twin_signals VALUES(?,?,?,?,?,?)
-        ON CONFLICT(repo,key) DO UPDATE SET status=excluded.status,
+        ON CONFLICT(repo,key) DO UPDATE SET kind=excluded.kind,status=excluded.status,
             updated=excluded.updated,ordinal=excluded.ordinal
     """, (repo, key, kind, status, stamp, ordinal))
-    prior = old["status"] if old else None
-    if animate and kind in ("issue", "ci"):
-        entity = opaque("bug", repo, key)
-        if status == "open" and prior != "open":
-            emit(con, repo, now, "bug_opened", entity)
-        elif prior == "open" and status in ("resolved", "dismissed"):
-            emit(con, repo, now, "bug_" + status, entity)
-    elif animate and kind in ("pull", "release") and (kind == "pull" or prior is None):
+    if not animate:
+        return
+    was_bug = old and old["kind"] in BUG_KINDS and old["status"] == "open"
+    is_bug = kind in BUG_KINDS and status == "open"
+    if is_bug and not was_bug:
+        emit(con, repo, now, "bug_opened", opaque("bug", repo, key))
+    elif was_bug and not is_bug:
+        event = "bug_resolved" if kind in BUG_KINDS and status == "resolved" else "bug_dismissed"
+        emit(con, repo, now, event, opaque("bug", repo, key))
+    elif kind == "pull" or (kind == "release" and old is None):
         emit(con, repo, now, kind)
+
 
 
 class Twin:
@@ -290,15 +314,37 @@ class Twin:
             visible[repo] = config["id"]
             level, tier = level_tier(row["xp"])
             stats = {"commits": row["commit_count"], "pulls": 0, "issues": 0, "ci": 0, "releases": 0}
-            names = {"issue": "issues", "pull": "pulls", "ci": "ci", "release": "releases"}
+            names = {"issue": "issues", "pull": "pulls", "ci": "ci", "release": "releases",
+                     **dict.fromkeys(BUG_CLASSES, "issues")}
             for count in con.execute("SELECT kind,count(*) AS n FROM twin_signals WHERE repo=? GROUP BY kind",
                                      (repo,)):
-                stats[names[count["kind"]]] = count["n"]
-            bugs = [{"id": opaque("bug", repo, bug["key"]), "kind": bug["kind"]} for bug in con.execute(
+                stats[names[count["kind"]]] += count["n"]
+            bugs = []
+            for bug in con.execute(
                 "SELECT key,kind FROM twin_signals WHERE repo=? AND status='open' "
-                "AND kind IN ('issue','ci') ORDER BY updated DESC,key LIMIT ?", (repo, MAX_BUGS))]
-            bug_count = con.execute("SELECT count(*) FROM twin_signals WHERE repo=? AND status='open' "
-                                    "AND kind IN ('issue','ci')", (repo,)).fetchone()[0]
+                f"AND kind IN ({BUG_KIND_SQL}) ORDER BY updated DESC,key LIMIT ?", (repo, *BUG_KINDS, MAX_BUGS)
+            ):
+                entry = {"id": opaque("bug", repo, bug["key"]), "kind": "ci" if bug["kind"] == "ci" else "issue"}
+                if entry["kind"] == "issue":
+                    entry["classification"] = bug["kind"]
+                bugs.append(entry)
+            bug_count = con.execute(
+                "SELECT count(*) FROM twin_signals WHERE repo=? AND status='open' "
+                f"AND kind IN ({BUG_KIND_SQL})", (repo, *BUG_KINDS)
+            ).fetchone()[0]
+            activity = con.execute("SELECT * FROM twin_development WHERE repo=?", (repo,)).fetchone()
+            development = None
+            if activity:
+                open_tasks, pr_open, pr_merged = con.execute("""
+                    SELECT count(CASE WHEN kind='issue' AND status='open' THEN 1 END),
+                           count(CASE WHEN kind='pull' AND status='open' THEN 1 END),
+                           count(CASE WHEN kind='pull' AND status='merged' THEN 1 END)
+                    FROM twin_signals WHERE repo=?
+                """, (repo,)).fetchone()
+                development = {"lastCommitAt": activity["commit_at"], "lastActivityAt": activity["activity_at"],
+                               "lastActivityKind": activity["activity_kind"], "openTasks": open_tasks,
+                               "pulls": {"open": pr_open, "merged": pr_merged},
+                               "ci": {key: activity["ci_" + key] for key in ("running", "passed", "failed")}}
             observed = row["observed_at"]
             if observed is not None:
                 freshness.append(observed)
@@ -306,7 +352,7 @@ class Twin:
                 "id": config["id"], "name": config["name"], "level": level, "tier": tier, "xp": row["xp"],
                 "runCommits": row["run_commits"], "bonusBps": bonus(row["reboots"]), "reboots": row["reboots"],
                 "rebootEligible": row["run_commits"] >= REBOOT_COMMITS, "rebootRequired": REBOOT_COMMITS,
-                "stats": stats, "bugs": bugs, "bugCount": bug_count, "observedAt": observed,
+                "stats": stats, "development": development, "bugs": bugs, "bugCount": bug_count, "observedAt": observed,
                 "stale": observed is None or now - observed > STALE_SECONDS,
             })
         clock = con.execute("SELECT * FROM twin_clock WHERE id=1").fetchone()
@@ -323,8 +369,9 @@ class Twin:
                 current.update(name=agent["id"], taskId=agent.get("taskId"))
             if agent.get("issueId"):
                 key = "issue:" + str(agent["issueId"])
-                if con.execute("SELECT 1 FROM twin_signals WHERE repo=? AND key=? AND status='open'",
-                               (repo, key)).fetchone():
+                kinds = ",".join("?" for _ in BUG_CLASSES)
+                if con.execute("SELECT 1 FROM twin_signals WHERE repo=? AND key=? AND status='open' "
+                               f"AND kind IN ({kinds})", (repo, key, *BUG_CLASSES)).fetchone():
                     current["bugId"] = opaque("bug", repo, key)
             agents.append(current)
         key = "public_id" if public else "id"
@@ -351,7 +398,7 @@ class Twin:
             events.append(event)
         revision = clock["public_revision" if public else "revision"]
         return {"version": 1, "revision": revision, "cursor": cursor,
-                "cursorReset": reset, "eventGap": gap, "projects": projects, "agents": agents,
+                "cursorReset": reset, "eventGap": gap, "projects": projects, "world": world_progress(projects), "agents": agents,
                 "events": events, "updatedAt": max(freshness, default=None), "serverTime": now,
                 "demo": False}
 
@@ -365,7 +412,10 @@ def demo_snapshot(since=None, now=None):
                "runCommits": 42, "bonusBps": 10000, "reboots": 0, "rebootEligible": False,
                "rebootRequired": REBOOT_COMMITS, "stale": False, "observedAt": now,
                "stats": {"commits": 42, "issues": 3, "pulls": 8, "ci": 4, "releases": 2},
-               "bugs": [{"id": "demo-issue", "kind": "issue"}] if phase < 2 else [],
+               "development": {"lastCommitAt": now - 90, "lastActivityAt": tick * 8, "lastActivityKind": "issue",
+                               "openTasks": 3, "pulls": {"open": 2, "merged": 6},
+                               "ci": {"running": 1, "passed": 2, "failed": 1}},
+               "bugs": [{"id": "demo-issue", "kind": "issue", "classification": "bug"}] if phase < 2 else [],
                "bugCount": int(phase < 2)}
     kinds = ("bug_opened", "agent", "bug_resolved", "levelup", "install")
     events = [{"id": n, "type": kinds[n % 5], "projectId": project["id"], "entityId": "demo-issue",
@@ -375,4 +425,4 @@ def demo_snapshot(since=None, now=None):
              "bugId": "demo-issue" if phase < 2 else None, "progress": None, "observedAt": now, "stale": False}
     return {"version": 1, "revision": tick, "cursor": tick, "cursorReset": since is not None and since > tick,
             "eventGap": since is not None and since < tick - 5, "projects": [project], "agents": [agent],
-            "events": events, "updatedAt": now, "serverTime": now, "demo": True}
+            "events": events, "world": world_progress([project]), "updatedAt": now, "serverTime": now, "demo": True}

@@ -24,7 +24,7 @@ import time
 from urllib.parse import quote
 
 from . import economy
-from .twin import REQUIRED_TABLES as TWIN_TABLES
+from .twin import DEVELOPMENT_TABLES, REQUIRED_TABLES as TWIN_TABLES
 from .store import BACKUP_KEEP, SCHEMA_VERSION, Store, WorldBusy
 
 REQUIRED_TABLES = {
@@ -84,6 +84,8 @@ def verify_database(path):
         if schema is not None and (schema < 0 or schema > SCHEMA_VERSION):
             problems.append(f"unsupported schema version: {schema}")
         required_tables = {**REQUIRED_TABLES, **TWIN_TABLES} if schema is not None and schema >= 5 else REQUIRED_TABLES
+        if schema is not None and schema >= 6:
+            required_tables.update(DEVELOPMENT_TABLES)
         tables = {
             row[0]: {column[1] for column in con.execute(f'PRAGMA table_info("{row[0]}")')}
             for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")

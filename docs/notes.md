@@ -17,3 +17,6 @@
 | 2026-11-24 | 운영 배포 완료 (`/admin/idle-ops/`) | 릴리스 `20261124-235022`, main `087246a` |
 | 2026-11-25 | 공유 월드 전환 + 공개 읽기 전용 뷰 `/idle-ops/` | ADR-0019, 기존 최고 누적 플레이어 1회 이관, `world`/`world_ops`/`world_events` |
 | 2026-11-25 | 공개 화면은 Canvas 2D 미니 엔진 + 향단이 연출 | About 카드 레퍼런스 스프라이트, 이벤트 커서 폴링, 관리자 콘솔은 그대로 유지 |
+| 2026-11-25 | Phase 2 워크오더 진행 (branch `feature/phase2-core-evolution`) | 2A 정산·리셋·시계·수치, 2B 공개 스냅샷·멱등·관리자 타임스탬프·이벤트 복구·백업/복구/readiness, 2C 엔진 모듈 분리·스프라이트 상태머신, 2D 아트 구조·디렉션·에셋 요구사항(신규 아트 생성 없음), 2E 콘텐츠 인터페이스·밸런스 지문·설계 문서. 운영 배포·main 병합 금지 |
+| 2026-11-25 | Phase 2F QA: 128개 테스트, UI 320~1920, API 1시간 soak, 브라우저 47분 실행 | 결과는 `docs/PHASE2_QA_REPORT.md`·`PERFORMANCE_REPORT.md`. M1 실측 + Pi 1차 실측(임시 인스턴스 서버 부하 PASS, headless FPS 18~21), backlog 128 |
+| 2026-11-25 | Phase 2.1 교정·릴리스 게이트: 207개 테스트, REG-01~20, 서버·브라우저 1시간 soak | 결과는 `docs/PHASE2_1_QA_REPORT.md`·`PHASE2_1_RELEASE_GATE.md`·`PHASE2_1_PERFORMANCE_REPORT.md`. M1 실측만, Pi·Nginx·실기 미측정. main 병합·배포 없음 |

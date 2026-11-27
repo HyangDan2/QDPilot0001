@@ -1,0 +1,6 @@
+{
+  "name": "hd2lab-idle-ops-engine",
+  "private": true,
+  "type": "module",
+  "description": "Browser ES modules for the public Idle Ops scene; type=module lets Node tests import them directly."
+}

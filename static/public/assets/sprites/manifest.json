@@ -1,0 +1,47 @@
+{
+  "version": 3,
+  "character": "hyangdani",
+  "anchor": [0.5, 1.0],
+  "facing": "right",
+  "maxTexture": 4096,
+  "cell": [768, 768],
+  "naming": "hyangdani-{state}.png",
+  "states": {
+    "idle": {
+      "frames": 8, "fps": 8, "loop": true, "seconds": 1.0, "facing": "right",
+      "source": null,
+      "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
+    },
+    "run": {
+      "frames": 12, "fps": 12, "loop": true, "seconds": 1.0, "facing": "right",
+      "source": null,
+      "fallback": { "file": "hyangdani-run.png", "facing": "right" }
+    },
+    "attack": {
+      "frames": 12, "fps": 16, "loop": false, "seconds": 0.75, "facing": "right",
+      "hits": [{ "frame": 6, "type": "strike" }],
+      "source": null,
+      "fallback": { "file": "hyangdani-strike.png", "facing": "right" }
+    },
+    "repair": {
+      "frames": 8, "fps": 10, "loop": true, "seconds": 0.8, "facing": "right",
+      "source": null,
+      "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
+    },
+    "levelup": {
+      "frames": 12, "fps": 12, "loop": false, "seconds": 1.0, "facing": "right",
+      "source": null,
+      "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
+    },
+    "install": {
+      "frames": 12, "fps": 12, "loop": false, "seconds": 1.0, "facing": "right",
+      "source": null,
+      "fallback": { "file": "hyangdani-idle.png", "facing": "right" }
+    }
+  },
+  "bugs": {
+    "alive": { "file": "bug-alive.png", "facing": "left" },
+    "hit": { "file": "bug-hit.png", "facing": "left" },
+    "naming": "bug-{state}.png"
+  }
+}

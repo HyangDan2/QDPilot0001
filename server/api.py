@@ -17,11 +17,11 @@ import os
 import re
 import sqlite3
 import sys
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import economy
+from . import content, economy
+from .store import OpConflict, SnapshotCache, WorldBusy, WorldUnavailable
 
 ADMIN_BASE = "/admin/idle-ops"
 ADMIN_API = ADMIN_BASE + "/api/v1"
@@ -30,10 +30,20 @@ PUBLIC_API = PUBLIC_BASE + "/api/v1"
 MAX_BODY = 8 * 1024
 OP_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 ACTION_TYPES = {"buyServer", "buyUpgrade", "reboot", "reset"}
+HARD_RESET_CONFIRM = "HARD RESET"
+# Server-HQ admin-auth emits X-HD2Lab-Role=admiral for both Chairman/Overlord
+# accounts and accounts granted the admiral service role, so that header alone
+# cannot separate the top administrator from a regular admin. It also emits
+# X-HD2Lab-Account-Role=chairman only for the actual top administrator
+# (is_overlord or role == chairman). Nginx overwrites both headers from the
+# auth_request response. Destructive authority requires both signals.
+SERVICE_ROLE = "admiral"
+TOP_ADMIN_ACCOUNT_ROLE = "chairman"
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
     ".svg": "image/svg+xml",
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -69,14 +79,30 @@ def build_payload(result, now):
         "duplicate": result.duplicate,
         "events": result.events,
         "cursor": result.cursor,
+        "cursorReset": bool(result.cursor_reset),
+        "eventGap": bool(result.event_gap),
+        "worldGeneration": result.world_generation,
+        "worldRevision": result.revision,
+        "stale": bool(result.stale),
+        **({"timestamps": result.timestamps} if result.timestamps else {}),
     }
+
+
+def _reject_json_constant(token):
+    raise ValueError(f"invalid JSON constant: {token}")
 
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "HD2LabIdleOps/1.1"
+    # Close idle keep-alive connections (and stalled request lines/bodies) so a
+    # slow or abandoned client cannot pin a worker thread indefinitely.
+    timeout = 20
     store = None
+    snapshot = None
     dev_user = None
+    dev_role = None
+    dev_account_role = None
     static_root = None
     public_root = None
 
@@ -90,7 +116,7 @@ class Handler(BaseHTTPRequestHandler):
         return address or "unix"
 
     def _json(self, code, payload):
-        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -106,6 +132,25 @@ class Handler(BaseHTTPRequestHandler):
             user = self.dev_user
         return user
 
+    def _role(self):
+        role = (self.headers.get("X-HD2Lab-Role") or "").strip()
+        if not role and self.dev_role:
+            role = self.dev_role
+        return role
+
+    def _account_role(self):
+        role = (self.headers.get("X-HD2Lab-Account-Role") or "").strip()
+        if not role and self.dev_account_role:
+            role = self.dev_account_role
+        return role
+
+    def _can_hard_reset(self):
+        return (
+            bool(self._username())
+            and self._role() == SERVICE_ROLE
+            and self._account_role() == TOP_ADMIN_ACCOUNT_ROLE
+        )
+
     def _read_json(self):
         try:
             length = int(self.headers.get("Content-Length") or 0)
@@ -117,7 +162,7 @@ class Handler(BaseHTTPRequestHandler):
             raise OverflowError("request body too large")
         raw = self.rfile.read(length)
         try:
-            value = json.loads(raw.decode("utf-8"))
+            value = json.loads(raw.decode("utf-8"), parse_constant=_reject_json_constant)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("invalid JSON") from exc
         if not isinstance(value, dict):
@@ -144,13 +189,19 @@ class Handler(BaseHTTPRequestHandler):
             self._redirect(PUBLIC_BASE + "/")
             return
         if path == ADMIN_API + "/health/ready":
-            self._json(200, {"status": "ok", "service": "idle-ops"})
+            self._handle_ready()
             return
         if path == ADMIN_API + "/state":
             self._handle_state(public=False)
             return
+        if path == ADMIN_API + "/content":
+            self._handle_content()
+            return
+        if path == ADMIN_API + "/whoami":
+            self._handle_whoami()
+            return
         if path == PUBLIC_API + "/state":
-            self._handle_state(public=True)
+            self._handle_public_state()
             return
         if path.startswith(ADMIN_API + "/") or path.startswith(PUBLIC_API + "/"):
             self._json(404, {"detail": "not found"})
@@ -181,6 +232,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == ADMIN_API + "/reset":
             self._handle_action(reset=True)
             return
+        if path == ADMIN_API + "/hard-reset":
+            self._handle_hard_reset()
+            return
         if path.startswith(PUBLIC_API + "/"):
             self.close_connection = True
             self.send_response(405)
@@ -197,18 +251,76 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _handle_ready(self):
+        storage = self.store.readiness()
+        checks = {
+            "world": bool(storage.get("world")),
+            "schema": bool(storage.get("schema")),
+            "disk": bool(storage.get("disk")),
+        }
+        ready = bool(storage.get("ok"))
+        if not ready:
+            # Sizes, schema versions and the database path stay out of the
+            # response; operators read them from the service log instead.
+            self.log_message(
+                "readiness degraded: world=%s schema=%s (%s/%s) disk=%s free=%s",
+                checks["world"], checks["schema"], storage.get("schemaVersion"),
+                storage.get("expectedSchemaVersion"), checks["disk"], storage.get("freeBytes"),
+            )
+        self._json(
+            200 if ready else 503,
+            {"status": "ok" if ready else "degraded", "service": "idle-ops", "checks": checks},
+        )
+
     def _handle_state(self, public=False):
         user = "" if public else self._username()
         if not public and not user:
             self._json(401, {"detail": "admin authentication required"})
             return
-        now = time.time()
         try:
-            result = self.store.world(now, actor=user, since=self._since(self.path))
+            result = self.store.world(actor=user, since=self._since(self.path))
+        except WorldBusy as exc:
+            self.close_connection = True
+            self._json(503, {"detail": str(exc)})
+            return
         except (ValueError, sqlite3.Error) as exc:
             self._error(exc)
             return
-        self._json(200, build_payload(result, now))
+        self._json(200, build_payload(result, result.now))
+
+    def _handle_public_state(self):
+        try:
+            result = self.snapshot.latest(self._since(self.path))
+        except WorldUnavailable as exc:
+            self.log_message("public read unavailable: %s", exc)
+            self.close_connection = True
+            self._json(503, {"detail": "world is temporarily unavailable"})
+            return
+        except (ValueError, sqlite3.Error, OSError) as exc:
+            self._error(exc)
+            return
+        self._json(200, build_payload(result, result.now))
+
+    def _handle_content(self):
+        if not self._username():
+            self._json(401, {"detail": "admin authentication required"})
+            return
+        self._json(200, content.overview())
+
+    def _handle_whoami(self):
+        user = self._username()
+        if not user:
+            self._json(401, {"detail": "admin authentication required"})
+            return
+        # Only the caller's own trusted SSO headers are echoed back; the client
+        # uses canHardReset to hide a control it may not use. The server still
+        # enforces the same predicate on every hard-reset request.
+        self._json(200, {
+            "user": user,
+            "role": self._role(),
+            "accountRole": self._account_role(),
+            "canHardReset": self._can_hard_reset(),
+        })
 
     def _handle_action(self, reset=False):
         user = self._username()
@@ -238,16 +350,65 @@ class Handler(BaseHTTPRequestHandler):
         since = body.get("since")
         if not isinstance(since, int) or isinstance(since, bool) or since < 0:
             since = None
-        now = time.time()
         try:
-            result = self.store.world(now, action=action, op_id=op_id, actor=user, since=since)
+            result = self.store.world(action=action, op_id=op_id, actor=user, since=since)
+        except OpConflict as exc:
+            self._json(409, {"detail": str(exc)})
+            return
+        except WorldBusy as exc:
+            self.close_connection = True
+            self._json(503, {"detail": str(exc)})
+            return
         except ValueError as exc:
             self._json(400, {"detail": str(exc)})
             return
         except sqlite3.Error:
             self._error(RuntimeError("storage failure"))
             return
-        self._json(200, build_payload(result, now))
+        self._json(200, build_payload(result, result.now))
+
+    def _handle_hard_reset(self):
+        user = self._username()
+        if not user:
+            self._json(401, {"detail": "admin authentication required"})
+            return
+        if self._role() != SERVICE_ROLE:
+            self._json(403, {"detail": f"{SERVICE_ROLE} service role required"})
+            return
+        if self._account_role() != TOP_ADMIN_ACCOUNT_ROLE:
+            self._json(403, {"detail": f"{TOP_ADMIN_ACCOUNT_ROLE} account role required"})
+            return
+        try:
+            body = self._read_json()
+        except OverflowError:
+            self.close_connection = True
+            self._json(413, {"detail": "request body too large"})
+            return
+        except ValueError as exc:
+            self._json(400, {"detail": str(exc)})
+            return
+        if body.get("confirm") != HARD_RESET_CONFIRM:
+            self._json(400, {"detail": f"confirmation must be {HARD_RESET_CONFIRM}"})
+            return
+        op_id = body.get("opId")
+        if not isinstance(op_id, str) or not OP_ID.fullmatch(op_id):
+            self._json(400, {"detail": "invalid opId"})
+            return
+        try:
+            result = self.store.hard_reset(op_id=op_id, actor=user)
+        except OpConflict as exc:
+            self._json(409, {"detail": str(exc)})
+            return
+        except WorldBusy as exc:
+            self.close_connection = True
+            self._json(503, {"detail": str(exc)})
+            return
+        except (OSError, sqlite3.Error) as exc:
+            self._error(RuntimeError(f"hard reset failed: {exc}"))
+            return
+        payload = build_payload(result, result.now)
+        payload["backup"] = (result.details or {}).get("backup")
+        self._json(200, payload)
 
     def _error(self, exc):
         self.log_message("error: %s", exc)
@@ -282,19 +443,33 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
-def make_handler(store, dev_user=None, static_root=None, public_root=None):
+def make_handler(store, dev_user=None, static_root=None, public_root=None, dev_role=None, snapshot=None,
+                 dev_account_role=None):
     return type(
         "BoundHandler",
         (Handler,),
         {
             "store": store,
+            "snapshot": snapshot if snapshot is not None else SnapshotCache(store),
             "dev_user": dev_user,
             "static_root": static_root,
             "public_root": public_root,
+            "dev_role": dev_role,
+            "dev_account_role": dev_account_role,
         },
     )
 
 
+class Server(ThreadingHTTPServer):
+    # The stdlib default backlog is 5, which drops SYNs (and adds ~1s retry
+    # latency) when many viewers connect at once. Accept bursts instead.
+    request_queue_size = 128
+    # Handler threads are daemons so a stalled connection never blocks service
+    # shutdown; Handler.timeout bounds how long one connection may stay idle.
+    daemon_threads = True
+    allow_reuse_address = True
+
+
 def make_server(host, port, **kwargs):
     handler = make_handler(**kwargs)
-    return ThreadingHTTPServer((host, port), handler)
+    return Server((host, port), handler)

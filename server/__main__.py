@@ -8,15 +8,15 @@ import signal
 import socketserver
 import stat
 import sys
-from http.server import ThreadingHTTPServer
 
-from .api import make_handler
+from .api import Server, make_handler
 from .store import Store
 
 
 class ThreadingUnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
     allow_reuse_address = True
+    request_queue_size = 128
 
 
 def _prepare_socket(path):
@@ -36,14 +36,21 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8123)
     parser.add_argument("--socket-mode", type=lambda value: int(value, 8), default=0o660)
     parser.add_argument("--dev-user", help="fallback X-HD2Lab-User for local preview only")
+    parser.add_argument("--dev-role", help="fallback X-HD2Lab-Role for local preview only")
+    parser.add_argument("--dev-account-role", help="fallback X-HD2Lab-Account-Role for local preview only")
     parser.add_argument("--static-root", help="serve the admin UI from this folder (local preview only)")
     parser.add_argument("--public-root", help="serve the public world UI from this folder (local preview only)")
     args = parser.parse_args(argv)
 
     store = Store(args.db)
+    # ``server.backup restore`` refuses to replace the file while this lock is
+    # held, so an accidental online restore cannot race the running service.
+    service_lock = store.acquire_service_lock()
     handler = make_handler(
         store,
         dev_user=args.dev_user,
+        dev_role=args.dev_role,
+        dev_account_role=args.dev_account_role,
         static_root=args.static_root,
         public_root=args.public_root,
     )
@@ -53,7 +60,7 @@ def main(argv=None):
         os.chmod(args.uds, args.socket_mode)
         print(f"idle-ops listening on unix:{args.uds} db={args.db}", file=sys.stderr)
     else:
-        server = ThreadingHTTPServer((args.host, args.port), handler)
+        server = Server((args.host, args.port), handler)
         print(f"idle-ops listening on http://{args.host}:{args.port} db={args.db}", file=sys.stderr)
 
     def stop(_signum, _frame):
@@ -68,6 +75,7 @@ def main(argv=None):
         server.server_close()
         if args.uds and os.path.exists(args.uds):
             os.unlink(args.uds)
+        service_lock.close()
 
 
 if __name__ == "__main__":

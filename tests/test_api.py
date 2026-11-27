@@ -5,8 +5,10 @@ import json
 import os
 import socket
 import socketserver
+import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -56,11 +58,15 @@ class ApiTests(unittest.TestCase):
         cls.server.server_close()
         cls.tmp.cleanup()
 
-    def call(self, method, path, body=None, user=USER, raw_body=None):
+    def call(self, method, path, body=None, user=USER, raw_body=None, role=None, account_role=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         headers = {}
         if user:
             headers["X-HD2Lab-User"] = user
+        if role:
+            headers["X-HD2Lab-Role"] = role
+        if account_role:
+            headers["X-HD2Lab-Account-Role"] = account_role
         payload = raw_body
         if body is not None:
             payload = json.dumps(body)
@@ -75,10 +81,110 @@ class ApiTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_duplicate_operation_replays_and_applies_once(self):
+        self.call("POST", ADMIN + "/api/v1/reset", body={"opId": "op_rst_idem_01"}, user="buyer")
+        payload = {"opId": "op_idem_http_1", "action": {"type": "buyServer", "tier": "cache", "qty": 1}}
+        first_status, _, first = self.call("POST", ADMIN + "/api/v1/actions", body=payload, user="buyer")
+        second_status, _, second = self.call("POST", ADMIN + "/api/v1/actions", body=payload, user="buyer")
+        self.assertEqual(first_status, 200)
+        self.assertEqual(second_status, 200)
+        self.assertTrue(second["duplicate"])
+        self.assertEqual(second["state"]["servers"], first["state"]["servers"])
+        self.assertEqual(second["message"], first["message"])
+
+    def test_conflicting_operation_returns_conflict(self):
+        self.call("POST", ADMIN + "/api/v1/reset", body={"opId": "op_rst_idem_02"}, user="buyer")
+        status, _, _ = self.call(
+            "POST", ADMIN + "/api/v1/actions",
+            body={"opId": "op_idem_http_2", "action": {"type": "buyServer", "tier": "cache", "qty": 1}},
+            user="buyer",
+        )
+        self.assertEqual(status, 200)
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/actions",
+            body={"opId": "op_idem_http_2", "action": {"type": "buyServer", "tier": "cache", "qty": 10}},
+            user="buyer",
+        )
+        self.assertEqual(status, 409)
+        self.assertIn("opId", body["detail"])
+
+    def test_admin_payload_has_independent_timestamps(self):
+        status, _, body = self.call("GET", ADMIN + "/api/v1/state", user="stamp_admin")
+        self.assertEqual(status, 200)
+        stamps = body["timestamps"]
+        for key in ("worldSettledAt", "adminLastSeen", "adminLastCheck", "lastRewardAt", "awaySeconds"):
+            self.assertIn(key, stamps)
+        self.assertGreaterEqual(stamps["worldSettledAt"], stamps["adminLastCheck"])
+        public = self.call("GET", WORLD + "/api/v1/state", user=None)[2]
+        self.assertNotIn("timestamps", public)
+
+    def test_public_event_stream_keeps_admin_details_out(self):
+        self.call("POST", ADMIN + "/api/v1/reset", body={"opId": "op_rst_priv_01"}, user="privacy")
+        self.call(
+            "POST", ADMIN + "/api/v1/actions",
+            body={"opId": "op_priv_install", "action": {"type": "buyServer", "tier": "cache", "qty": 1}},
+            user="privacy",
+        )
+        status, _, body = self.call("GET", WORLD + "/api/v1/state?since=0", user=None)
+        self.assertEqual(status, 200)
+        self.assertIn("cursorReset", body)
+        self.assertIn("eventGap", body)
+        self.assertTrue(body["events"])
+        for event in body["events"]:
+            for secret in ("actor", "opId", "op_id", "message", "backup", "user"):
+                self.assertNotIn(secret, event)
+
+    def test_public_cursor_past_the_newest_event_signals_reset(self):
+        newest = self.call("GET", WORLD + "/api/v1/state?since=0", user=None)[2]["cursor"]
+        status, _, body = self.call("GET", WORLD + "/api/v1/state?since=999999", user=None)
+        self.assertEqual(status, 200)
+        self.assertTrue(body["cursorReset"])
+        self.assertEqual(body["events"], [])
+        self.assertEqual(body["cursor"], newest)
+
+    def test_public_read_does_not_touch_the_database(self):
+        self.call("GET", ADMIN + "/api/v1/state")
+        with sqlite3.connect(self.store.path) as con:
+            before = (
+                con.execute("SELECT state_json, updated_at FROM world WHERE id = 1").fetchone(),
+                con.execute("SELECT COUNT(*) FROM world_events").fetchone()[0],
+            )
+        for _ in range(3):
+            status, _, body = self.call("GET", WORLD + "/api/v1/state", user=None)
+            self.assertEqual(status, 200)
+            self.assertNotIn("message", body["events"][:1] if body["events"] else [])
+        with sqlite3.connect(self.store.path) as con:
+            after = (
+                con.execute("SELECT state_json, updated_at FROM world WHERE id = 1").fetchone(),
+                con.execute("SELECT COUNT(*) FROM world_events").fetchone()[0],
+            )
+        self.assertEqual(before, after)
+
+    def test_public_view_sees_admin_writes_immediately(self):
+        self.call("GET", WORLD + "/api/v1/state", user=None)
+        self.call("POST", ADMIN + "/api/v1/actions",
+                  body={"opId": "op_public_sync", "action": {"type": "buyServer", "tier": "cache", "qty": 1}},
+                  user="buyer")
+        status, _, body = self.call("GET", WORLD + "/api/v1/state", user=None)
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(body["state"]["servers"]["cache"], 2)
+
+    def test_state_reports_server_time(self):
+        status, _, body = self.call("GET", ADMIN + "/api/v1/state")
+        self.assertEqual(status, 200)
+        self.assertLess(abs(body["serverTime"] - time.time()), 10)
+
     def test_health_is_available_without_identity(self):
         status, _, body = self.call("GET", ADMIN + "/api/v1/health/ready", user=None)
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "ok")
+        self.assertEqual(body["service"], "idle-ops")
+        self.assertEqual(body["checks"], {"world": True, "schema": True, "disk": True})
+        # The readiness body must not leak storage internals or paths.
+        self.assertNotIn("storage", body)
+        self.assertNotIn("dbBytes", body)
+        self.assertNotIn("freeBytes", body)
+        self.assertNotIn("schemaVersion", body)
 
     def test_public_state_needs_no_identity_and_is_sanitised(self):
         status, headers, body = self.call("GET", WORLD + "/api/v1/state", user=None)
@@ -177,6 +283,96 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(body["state"]["servers"], {"cache": 1})
         self.assertEqual(body["state"]["tokens"], 0)
         self.assertIn("초기화", body["message"])
+
+    def test_hard_reset_requires_overlord_role(self):
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_role", "confirm": "HARD RESET"}, user="crew", role="crew",
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("admiral", body["detail"])
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_role", "confirm": "HARD RESET"}, user="admiral", role="admiral",
+            account_role="crew",
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("chairman", body["detail"])
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_role", "confirm": "HARD RESET"}, user="admiral", role="admiral",
+        )
+        self.assertEqual(status, 403)
+        self.assertIn("chairman", body["detail"])
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_role", "confirm": "HARD RESET"}, user="boss", role="chairman",
+        )
+        self.assertEqual(status, 403)
+        status, _, _ = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_role", "confirm": "HARD RESET"}, user=None,
+        )
+        self.assertEqual(status, 401)
+
+    def test_whoami_reports_only_the_callers_authority(self):
+        status, _, body = self.call("GET", ADMIN + "/api/v1/whoami", user="boss", role="admiral",
+                                    account_role="chairman")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["user"], "boss")
+        self.assertTrue(body["canHardReset"])
+        status, _, body = self.call("GET", ADMIN + "/api/v1/whoami", user="admin", role="admiral",
+                                    account_role="crew")
+        self.assertEqual(status, 200)
+        self.assertFalse(body["canHardReset"])
+        status, _, _ = self.call("GET", ADMIN + "/api/v1/whoami", user=None, role="admiral")
+        self.assertEqual(status, 401)
+
+    def test_hard_reset_requires_exact_confirmation(self):
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_conf", "confirm": "hard reset"}, user="boss", role="admiral",
+            account_role="chairman",
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("HARD RESET", body["detail"])
+
+    def test_hard_reset_zeroes_world_and_returns_backup(self):
+        self.call("GET", ADMIN + "/api/v1/state", user="boss")
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/hard-reset",
+            body={"opId": "op_hard_ok_1", "confirm": "HARD RESET"}, user="boss", role="admiral",
+            account_role="chairman",
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["state"]["tokens"], 0)
+        self.assertEqual(body["state"]["total_lifetime"], 0)
+        self.assertEqual(body["state"]["reboots"], 0)
+        self.assertTrue(os.path.isfile(body["backup"]))
+
+    def test_generic_actions_endpoint_rejects_hard_reset(self):
+        status, _, _ = self.call(
+            "POST", ADMIN + "/api/v1/actions",
+            body={"opId": "op_hard_gen", "action": {"type": "hardReset"}},
+            user="boss", role="admiral",
+        )
+        self.assertEqual(status, 400)
+
+    def test_json_constants_are_rejected(self):
+        for token in ("NaN", "Infinity", "-Infinity"):
+            raw = '{"opId":"op_nan_0001","action":{"type":"buyServer","tier":"cache","qty":1},"x":%s}' % token
+            status, _, body = self.call("POST", ADMIN + "/api/v1/actions", raw_body=raw, user="buyer")
+            self.assertEqual(status, 400, msg=token)
+            self.assertIn("invalid JSON", body["detail"])
+
+    def test_non_string_tier_is_a_client_error(self):
+        status, _, body = self.call(
+            "POST", ADMIN + "/api/v1/actions",
+            body={"opId": "op_bad_tier_1", "action": {"type": "buyServer", "tier": 5, "qty": 1}},
+            user="buyer",
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("tier", body["detail"])
 
     def test_unauthorised_action(self):
         status, _, _ = self.call(

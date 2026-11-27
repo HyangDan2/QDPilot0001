@@ -1,0 +1,16 @@
+# Proposal, not installed by this repository. Review with Server-HQ operations
+# before enabling. Runs one verified daily snapshot; retention (14) and
+# same-day deduplication are enforced by server.backup.
+[Unit]
+Description=HD2Lab Idle Ops verified daily backup
+After=hd2lab-idle-ops.service
+
+[Service]
+Type=oneshot
+User=hd2lab-idle-ops
+Group=hd2lab-idle-ops
+WorkingDirectory=/opt/hd2lab-idle-ops/current
+ExecStart=/usr/bin/python3 -m server.backup create --db /var/lib/hd2lab-idle-ops/game.sqlite3 --kind daily
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

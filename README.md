@@ -12,7 +12,7 @@ HD2Lab Server-HQ의 **공유 월드 방치형 게임**입니다. 서버실을 �
 - **멱등 액션**: `opId`(8~64자 `[A-Za-z0-9_-]`)가 30일간 유일 키(`world_ops`)로 기록되어 재시도·중복 요청이 상태를 두 번 바꾸지 않습니다.
 - **연출 이벤트**: `install`·`upgrade`·`levelup`·`achievement`·`reboot`·`reset`을 `world_events`에 기록하고, 공개 클라이언트는 `?since=<cursor>`로 증분 조회해 설치 연출·레벨업 효과·로그를 재생합니다. 액터 이름은 공개 응답에 포함하지 않습니다.
 - **전환 이관**: 최초 기동 시 기존 `players` 테이블에서 누적 생산량이 가장 큰 행의 상태를 1회 이관합니다. `players`는 삭제하지 않고 보존합니다.
-- **공개 화면**: 의존성 없는 Canvas 2D 미니 엔진(`static/public/assets/engine.js`)이 서버실·설치 애니메이션·향단이 이동/전투를 그리고, `world.js`가 8초 폴링·이벤트 로그·드로워·메뉴를 담당합니다.
+- **공개 화면**: 의존성 없는 Canvas 2D 미니 엔진(`static/public/assets/engine/`)이 서버실·설치 애니메이션·향단이 이동/전투를 그리고, `world.js`가 8초 폴링·이벤트 로그·드로워·메뉴를 담당합니다. 스프라이트 시트가 없어도 [`sprites/manifest.json`](static/public/assets/sprites/manifest.json)의 단일 이미지 fallback으로 동작합니다.
 
 ## 성장 규칙 요약
 
@@ -31,11 +31,18 @@ HD2Lab Server-HQ의 **공유 월드 방치형 게임**입니다. 서버실을 �
 ```text
 server/economy.py   # 밸런스, 상태 정규화, 액션 검증, 레벨·발열·토큰 계산
 server/store.py     # SQLite(world, world_ops, world_events + 레거시 players) 트랜잭션·멱등 처리 (WAL)
+server/backup.py    # 정합성 백업·검증·복구 CLI (python3 -m server.backup)
+server/content.py   # 밸런스 지문·피처 플래그·콘텐츠 메타데이터 (기본 off)
 server/api.py       # 표준 라이브러리 HTTP API + 관리자/공개 정적 파일 서빙
 server/__main__.py  # UDS/TCP 실행 진입점 (--uds, --host/--port, --static-root, --public-root, --dev-user)
 static/             # Vanilla ES 모듈 관리자 콘솔 (index.html, assets/)
-static/public/      # 공개 월드 뷰 (index.html, assets/engine.js, world.js, sprites/)
-tests/              # 61개 단위·통합 테스트 (UDS 포함)
+static/public/      # 공개 월드 뷰 (index.html, world.js)
+static/public/assets/engine/   # Canvas 2D 엔진 모듈 (config·animation·sprites·effects·room·motion·scene)
+static/public/assets/sprites/  # 스프라이트와 manifest.json (시트 미납품 시 단일 이미지 fallback)
+art/                # 웹 루트 밖 아트 원본(source)·반입 대기(export) — 서빙되지 않음
+docs/               # GAME_DESIGN, ECONOMY_SPEC, ANIMATION_SPEC, ART_DIRECTION, ASSET_REQUIREMENTS, DB_MIGRATION, PHASE2_*, PERFORMANCE_REPORT, notes
+tools/              # qa_perf.py — 공개/관리자 부하·soak 하네스 (표준 라이브러리)
+tests/              # 207개 단위·통합 테스트 (UDS·릴리스 게이트 포함)
 ```
 
 ## 로컬 실행
@@ -62,7 +69,17 @@ python3 -m server --dev-user hd2service --static-root static --public-root stati
 | 〃 | `{"opId":"...","action":{"type":"buyUpgrade","id":"network"}}` |
 | 〃 | `{"opId":"...","action":{"type":"reboot"}}` |
 | `POST /reset` | `{"opId":"..."}` — 월드 초기화(토큰·레벨·업적 유지) |
-| `GET /health/ready` | `{"status":"ok","service":"idle-ops"}` (인증 없음, 준비 상태만) |
+| `POST /hard-reset` | `{"opId":"...","confirm":"HARD RESET"}` — Chairman 전용(admiral 서비스 권한 + chairman 계정 역할) |
+| `GET /whoami` | 호출자의 신뢰된 SSO 역할과 `canHardReset` (UI에서 위험 버튼 숨김용, 서버가 다시 강제) |
+| `GET /content` | 밸런스 버전·지문·피처 플래그(기본 off)·임계값 (상태 미포함) |
+| `GET /health/ready` | `{"status":"ok","service":"idle-ops","checks":{"world":true,"schema":true,"disk":true}}` — world 행·스키마 버전·여유 공간만 불리언으로 노출, 실패 시 503 (인증 없음) |
+
+Hard Reset 권한은 Server-HQ admin-auth의 실제 계정 체계를 따릅니다. `admiral_only` 서비스에서
+`X-HD2Lab-Role`은 Chairman과 grant된 admiral 모두에게 `admiral`로 내려오므로, 파괴적 권한은
+추가로 `X-HD2Lab-Account-Role: chairman`(실제 최고 관리자: `is_overlord` 또는 `role=chairman`)을
+요구합니다. 헤더가 없거나 해석할 수 없으면 거부합니다(fail closed). Nginx가 두 헤더를 SSO 결과로
+덮어쓰므로 클라이언트가 역할을 위조할 수 없습니다. 배포 시
+`deploy/nginx-idle-ops-account-role.patch`를 적용해야 합니다.
 
 공개 경로 기준: `/idle-ops/api/v1`
 
@@ -77,8 +94,21 @@ python3 -m server --dev-user hd2service --static-root static --public-root stati
 ## 테스트
 
 ```bash
-python3 -m unittest discover -s tests -t . -v   # 61 tests (실제 UDS 4건 포함)
+python3 -m unittest discover -s tests -t . -v   # 207 tests (실제 UDS 4건 포함)
+
+# 부하·soak (실행 중인 서버 대상, 프록시 우회 내장)
+python3 tools/qa_perf.py public --base http://127.0.0.1:8123 --viewers 100 --seconds 30 --interval 1
+python3 tools/qa_perf.py action --base http://127.0.0.1:8123 --workers 10 --ops 5
 ```
+
+Phase 2 검증 결과: [`docs/PHASE2_QA_REPORT.md`](docs/PHASE2_QA_REPORT.md),
+[`docs/PERFORMANCE_REPORT.md`](docs/PERFORMANCE_REPORT.md), 구현 범위·커밋은
+[`docs/PHASE2_IMPLEMENTATION_REPORT.md`](docs/PHASE2_IMPLEMENTATION_REPORT.md).
+
+Phase 2.1(교정·릴리스 게이트) 결과: [`docs/PHASE2_1_CORRECTION_REPORT.md`](docs/PHASE2_1_CORRECTION_REPORT.md),
+[`docs/PHASE2_1_QA_REPORT.md`](docs/PHASE2_1_QA_REPORT.md),
+[`docs/PHASE2_1_RELEASE_GATE.md`](docs/PHASE2_1_RELEASE_GATE.md),
+[`docs/PHASE2_1_PERFORMANCE_REPORT.md`](docs/PHASE2_1_PERFORMANCE_REPORT.md).
 
 ## 배포 (요약)
 
@@ -90,6 +120,9 @@ python3 -m unittest discover -s tests -t . -v   # 61 tests (실제 UDS 4건 포�
 
 ## 데이터·백업
 
-- 운영 DB: `/var/lib/hd2lab-idle-ops/game.sqlite3` (SQLite WAL)
-- 백업: `sqlite3 game.sqlite3 ".backup '<사본 경로>'"` 또는 서비스 중지 후 파일 복사
+- 운영 DB: `/var/lib/hd2lab-idle-ops/game.sqlite3` (SQLite WAL, 스키마 `PRAGMA user_version`)
+- 백업: `python3 -m server.backup create --db <db> --kind daily|pre-deploy` — 온라인 백업 API + `quick_check` 검증, 일일 보존 14개
+- 복구: 서비스 중지 후 `python3 -m server.backup restore --db <db> --file <backup>` (자동 pre-restore 백업·검증)
+- 준비 상태: `GET /admin/idle-ops/api/v1/health/ready`가 저장소·스키마·여유 공간을 반영(실패 503)
 - 저장 내용: 관리자 `username`별 상태 JSON과 30일 TTL 액션 로그. 비밀·토큰·쿠키는 저장하지 않습니다.
+- 상세 절차: [`docs/DB_MIGRATION.md`](docs/DB_MIGRATION.md)

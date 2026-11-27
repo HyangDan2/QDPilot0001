@@ -36,6 +36,13 @@ const els = {
   statCooling: byId("stat-cooling"),
   statTokens: byId("stat-tokens"),
   statReboots: byId("stat-reboots"),
+  cpLastCheck: byId("cp-last-check"),
+  cpLastReward: byId("cp-last-reward"),
+  cpObservedRequests: byId("cp-observed-requests"),
+  cpObservedLevel: byId("cp-observed-level"),
+  cpObservedGeneration: byId("cp-observed-generation"),
+  cpWorldGeneration: byId("cp-world-generation"),
+  cpStale: byId("cp-stale"),
   rackGrid: byId("rack-grid"),
   rackEmpty: byId("rack-empty"),
   rackSummary: byId("rack-summary"),
@@ -68,6 +75,11 @@ const els = {
   resetDialog: byId("reset-dialog"),
   resetConfirm: byId("reset-confirm"),
   resetCancel: byId("reset-cancel"),
+  hardResetOpen: byId("hard-reset-open"),
+  hardResetDialog: byId("hard-reset-dialog"),
+  hardResetInput: byId("hard-reset-input"),
+  hardResetConfirm: byId("hard-reset-confirm"),
+  hardResetCancel: byId("hard-reset-cancel"),
   toastRegion: byId("toast-region"),
 };
 
@@ -75,6 +87,7 @@ const game = {
   payload: null,
   pending: false,
   authError: false,
+  canHardReset: false,
   qty: 1,
   tab: "build",
   failures: 0,
@@ -117,11 +130,9 @@ function trimNumber(text) {
 }
 
 const COMPACT = [
-  [1e15, "Qa"],
-  [1e12, "T"],
-  [1e9, "B"],
-  [1e6, "M"],
-  [1e3, "K"],
+  [1e12, "조"],
+  [1e8, "억"],
+  [1e4, "만"],
 ];
 
 function fmt(value) {
@@ -176,6 +187,21 @@ function clockNow() {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+function fmtStamp(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "–";
+  return new Date(seconds * 1000).toLocaleString("ko-KR", {
+    month: "2-digit",
+    day: "2-digit",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function fmtGeneration(value) {
+  return Number.isFinite(value) ? `${value + 1}세대` : "–";
 }
 
 function makeOpId() {
@@ -291,6 +317,11 @@ function localizeError(detail) {
   if (!navigator.onLine) return "오프라인 상태입니다. 연결을 확인하세요.";
   const rules = [
     [/not enough requests/i, "요청이 부족합니다."],
+    [/admiral role required/i, "최고 관리자(admiral) 서비스 권한이 필요합니다."],
+    [/admiral service role required/i, "최고 관리자(admiral) 서비스 권한이 필요합니다."],
+    [/chairman account role required/i, "Chairman 계정만 Hard Reset을 실행할 수 있습니다."],
+    [/in progress; retry shortly/i, "다른 작업이 진행 중입니다. 잠시 후 다시 시도하세요."],
+    [/already used for a different action/i, "같은 작업 번호가 다른 요청에 사용되었습니다. 새로고침 후 다시 시도하세요."],
     [/already maxed/i, "이미 최대 레벨입니다."],
     [/not available yet/i, "아직 Reboot할 수 없습니다."],
     [/invalid action/i, "지원하지 않는 동작입니다."],
@@ -604,6 +635,21 @@ function render() {
   updateAffordability();
 }
 
+function renderCheckpoint(stamps) {
+  if (!stamps) return;
+  els.cpLastCheck.textContent = fmtStamp(stamps.adminLastCheck);
+  els.cpLastReward.textContent = fmtStamp(stamps.lastRewardAt);
+  els.cpObservedRequests.textContent = Number.isFinite(stamps.observedRequests)
+    ? fmtInt(stamps.observedRequests)
+    : "–";
+  els.cpObservedLevel.textContent = Number.isFinite(stamps.observedLevel)
+    ? `Lv.${stamps.observedLevel}`
+    : "–";
+  els.cpObservedGeneration.textContent = fmtGeneration(stamps.observedGeneration);
+  els.cpWorldGeneration.textContent = fmtGeneration(stamps.worldGeneration);
+  els.cpStale.hidden = !stamps.observedFromEarlierWorld;
+}
+
 function updateLiveNumbers() {
   if (!game.payload || document.hidden) return;
   const lifetime = currentLifetime();
@@ -669,6 +715,7 @@ function accept(data) {
 
   const awayVisible = showAway(data);
   announceGains(data, { awayVisible });
+  renderCheckpoint(data.timestamps);
 
   if (data.message && !data.duplicate) {
     addLog(data.message);
@@ -680,6 +727,23 @@ function accept(data) {
 }
 
 /* ---------- data flow ---------- */
+
+function applyIdentity(data) {
+  game.canHardReset = Boolean(data && data.canHardReset);
+  els.hardResetOpen.hidden = !game.canHardReset;
+  els.hardResetOpen.disabled = !game.canHardReset;
+}
+
+async function loadIdentity() {
+  try {
+    const data = await request(`${API}/whoami`);
+    applyIdentity(data);
+  } catch (error) {
+    // Fail closed: the hard-reset control stays hidden unless the server
+    // confirms the chairman account role. The server enforces it again.
+    applyIdentity(null);
+  }
+}
 
 async function load({ initial = false } = {}) {
   if (game.pending || game.authError) return;
@@ -704,38 +768,95 @@ async function load({ initial = false } = {}) {
   }
 }
 
-async function submitAction(action, { reset = false } = {}) {
+const opCoordinator = window.HD2OperationCoordinator.createOperationCoordinator({
+  storage: (() => {
+    try {
+      return window.sessionStorage;
+    } catch (error) {
+      return null;
+    }
+  })(),
+  makeId: makeOpId,
+});
+
+function opSignature(path, fields) {
+  return `${path}|${JSON.stringify(fields)}`;
+}
+
+async function resolvePendingOp() {
+  // Recovery takes the same lock as a user action, so a click cannot mint a
+  // second opId while the startup replay is still outstanding.
+  if (game.pending || !opCoordinator.hasPending()) return;
+  game.pending = true;
+  render();
+  try {
+    const result = await opCoordinator.recover();
+    if (result.status === "ok") {
+      accept(result.data);
+      return;
+    }
+    if (result.status === "auth") {
+      setSync("error", "로그인 필요");
+      showAuth(true);
+      return;
+    }
+    if (result.status === "rejected") {
+      toast(localizeError(result.message || "요청이 거부되었습니다."), { error: true });
+      return;
+    }
+    if (result.status === "retry") {
+      setSync("stale", "동기화 지연");
+      toast("이전 요청을 확인하지 못했습니다. 연결이 회복되면 같은 작업으로 이어서 처리합니다.", { error: true });
+    }
+  } finally {
+    game.pending = false;
+    render();
+    if (!game.payload && !game.authError) load({ initial: true });
+  }
+}
+
+async function submitAction(action, { reset = false, hardReset = false } = {}) {
   if (game.pending || game.authError) return null;
+  const path = hardReset ? `${API}/hard-reset` : reset ? `${API}/reset` : `${API}/actions`;
+  const fields = hardReset ? { confirm: "HARD RESET" } : reset ? {} : { action };
   game.pending = true;
   hideError();
   render();
   const seq = ++requestSeq;
   try {
-    const body = reset
-      ? JSON.stringify({ opId: makeOpId() })
-      : JSON.stringify({ opId: makeOpId(), action });
-    const data = await request(reset ? `${API}/reset` : `${API}/actions`, {
-      method: "POST",
-      body,
+    const result = await opCoordinator.submit({
+      path,
+      fields,
+      signature: opSignature(path, fields),
     });
-    if (seq < appliedSeq) return null;
-    appliedSeq = seq;
-    accept(data);
-    return data;
-  } catch (error) {
-    if (error.auth) {
+    if (result.status === "ok") {
+      if (seq < appliedSeq) return null;
+      appliedSeq = seq;
+      accept(result.data);
+      return result.data;
+    }
+    if (result.status === "auth") {
+      // The opId stays pending; re-login replays it once through recover().
       setSync("error", "로그인 필요");
       showAuth(true);
       return null;
     }
-    if (error.status === 400 || error.status === 403 || error.status === 413) {
-      toast(localizeError(error.message), { error: true });
+    if (result.status === "rejected") {
+      toast(localizeError(result.message || "요청이 거부되었습니다."), { error: true });
       return null;
     }
+    if (result.status === "blocked") {
+      toast("이전 요청을 확인하지 못했습니다. 연결을 확인한 뒤 다시 시도하세요.", { error: true });
+      return null;
+    }
+    if (result.status === "busy" || result.status === "invalid") return null;
     game.failures += 1;
     setSync("stale", "동기화 지연");
-    showError(localizeError(error.message));
-    toast(localizeError(error.message), { error: true });
+    const message = result.message === "network"
+      ? "서버에 연결하지 못했습니다."
+      : localizeError(result.message || "동기화 지연");
+    showError(message);
+    toast(`${message} 같은 작업을 다시 누르면 이어서 처리합니다.`, { error: true });
     return null;
   } finally {
     game.pending = false;
@@ -799,6 +920,29 @@ function bindDialogs() {
   els.resetConfirm.addEventListener("click", async () => {
     const data = await submitAction(null, { reset: true });
     if (data) els.resetDialog.close();
+  });
+  const syncHardResetInput = () => {
+    els.hardResetConfirm.disabled = !game.canHardReset || els.hardResetInput.value !== "HARD RESET";
+  };
+  els.hardResetOpen.hidden = true;
+  els.hardResetOpen.disabled = true;
+  els.hardResetOpen.addEventListener("click", () => {
+    if (!game.canHardReset) return;
+    els.hardResetInput.value = "";
+    syncHardResetInput();
+    els.hardResetDialog.showModal();
+    els.hardResetInput.focus();
+  });
+  els.hardResetInput.addEventListener("input", syncHardResetInput);
+  els.hardResetCancel.addEventListener("click", () => els.hardResetDialog.close());
+  els.hardResetConfirm.addEventListener("click", async () => {
+    if (!game.canHardReset || els.hardResetInput.value !== "HARD RESET") return;
+    const data = await submitAction(null, { hardReset: true });
+    if (data) {
+      els.hardResetDialog.close();
+      const backup = String(data.backup || "").split("/").pop();
+      toast(backup ? `Hard Reset 완료 · 백업 ${backup}` : "Hard Reset 완료");
+    }
   });
 }
 
@@ -921,6 +1065,8 @@ function init() {
   selectTab(game.tab);
   renderLog();
   ensureCsrf();
+  resolvePendingOp();
+  loadIdentity();
   load({ initial: true });
   window.setInterval(() => {
     if (document.hidden || game.pending || game.authError) return;

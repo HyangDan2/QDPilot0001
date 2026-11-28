@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover - Windows fallback keeps threads safe.
 from . import economy
 
 OP_TTL_SECONDS = 30 * 86400
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 BACKUP_KEEP = 14
 BACKUP_KINDS = ("daily", "pre-deploy", "pre-hardreset", "pre-restore", "manual")
 MIN_FREE_BYTES = 256 * 1024 * 1024
@@ -323,12 +323,12 @@ class Store:
             if not preserve_legacy:
                 con.execute("DELETE FROM action_ops WHERE created_at < ?", (self._now() - OP_TTL_SECONDS,))
                 con.execute("DELETE FROM world_ops WHERE created_at < ?", (self._now() - OP_TTL_SECONDS,))
-            from . import telemetry, twin
+            from . import discovery, telemetry, twin
 
             self._seed_world(con, self._now())
             if stored < SCHEMA_VERSION:
                 con.executescript("BEGIN IMMEDIATE;\n" + twin.SCHEMA + telemetry.SCHEMA
-                                  + twin.DEVELOPMENT_SCHEMA + twin.COLLECTOR_SCHEMA
+                                  + twin.DEVELOPMENT_SCHEMA + twin.COLLECTOR_SCHEMA + discovery.SCHEMA
                                   + f"PRAGMA user_version = {SCHEMA_VERSION}; COMMIT;")
 
     @staticmethod
@@ -514,10 +514,10 @@ class Store:
             try:
                 version = int(con.execute("PRAGMA user_version").fetchone()[0])
                 row = con.execute("SELECT state_json FROM world WHERE id = 1").fetchone()
-                from . import twin
+                from . import discovery, twin
                 tables = {entry[0] for entry in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 twin_ok = (twin.REQUIRED_TABLES.keys() | twin.DEVELOPMENT_TABLES.keys()
-                           | twin.COLLECTOR_TABLES.keys()) <= tables
+                           | twin.COLLECTOR_TABLES.keys() | discovery.TABLES.keys()) <= tables
             finally:
                 con.close()
             world_ok = False

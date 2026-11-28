@@ -28,6 +28,8 @@ with fictional IDs and a public display name approved for that project:
 
 The allowlist uses stable numeric GitHub repository IDs. Configured branches
 scope CI; the Collector discovers commit branches inside the approved repository.
+The optional [repository discovery policy](R3_3_1_REPOSITORY_COVERAGE.md) expands
+coverage only within approved public project families.
 A rename or path mismatch needs operator review. Verify the ID and permissions
 before indexing. GitHub confirms identity and visibility at each collection.
 Publication defaults to false and personal, internal and private repositories

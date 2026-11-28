@@ -23,7 +23,7 @@ import sys
 import time
 from urllib.parse import quote
 
-from . import economy
+from . import discovery, economy
 from .twin import COLLECTOR_TABLES, DEVELOPMENT_TABLES, REQUIRED_TABLES as TWIN_TABLES
 from .store import BACKUP_KEEP, SCHEMA_VERSION, Store, WorldBusy
 
@@ -88,6 +88,8 @@ def verify_database(path):
             required_tables.update(DEVELOPMENT_TABLES)
         if schema is not None and schema >= 7:
             required_tables.update(COLLECTOR_TABLES)
+        if schema is not None and schema >= 8:
+            required_tables.update(discovery.TABLES)
         tables = {
             row[0]: {column[1] for column in con.execute(f'PRAGMA table_info("{row[0]}")')}
             for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")

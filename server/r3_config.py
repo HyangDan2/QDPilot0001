@@ -2,16 +2,16 @@
 import json
 import os
 
-from . import telemetry, twin
+from . import discovery, telemetry, twin
 
 
-def load():
+def load_deployment():
     config = {}
     path = os.environ.get("IDLE_OPS_CONFIG")
     if path:
         with open(path, encoding="utf-8") as stream:
             config = json.load(stream)
-        if not isinstance(config, dict) or set(config) - {"repositories", "telemetry_tokens", "webhook_secret"}:
+        if not isinstance(config, dict) or set(config) - {"repositories", "telemetry_tokens", "webhook_secret", "discovery"}:
             raise ValueError("invalid Idle Ops configuration")
     projects = twin.registry(os.environ.get("IDLE_OPS_REPOSITORIES", json.dumps(config.get("repositories", []))))
     tokens = telemetry.load_tokens(os.environ.get(
@@ -19,4 +19,8 @@ def load():
     secret = os.environ.get("IDLE_OPS_GITHUB_WEBHOOK_SECRET", config.get("webhook_secret"))
     if secret is not None and (not isinstance(secret, str) or len(secret) < 32):
         raise ValueError("webhook secret must have at least 32 characters")
-    return projects, tokens, secret
+    return projects, tokens, secret, discovery.policy(config.get("discovery"))
+
+
+def load():
+    return load_deployment()[:3]

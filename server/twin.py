@@ -6,7 +6,7 @@ import json
 import re
 import time
 
-from . import telemetry
+from . import discovery, telemetry
 
 XP_PER_COMMIT = 10
 XP_PER_LEVEL = 100
@@ -146,7 +146,8 @@ def registry(raw):
         if type(publish) is not bool:
             raise ValueError("invalid repository publication flag")
         result[identifier] = {"id": opaque("project", identifier), "repo": repo,
-                              "name": name.strip(), "refs": tuple(refs), "publish": publish}
+                              "name": name.strip(), "refs": tuple(refs),
+                              "publish": publish and repo.split("/")[1].lower() != "server-hq"}
     return result
 
 
@@ -220,11 +221,11 @@ def signal(con, repo, item, now, animate):
 
 
 class Twin:
-    def __init__(self, store, projects, tokens=None):
+    def __init__(self, store, projects, tokens=None, discovery_policy=None):
         self.store = store
-        self.projects = projects
+        self.manual_projects = projects
         self.tokens = tokens or {}
-        self.by_id = {item["id"]: repo for repo, item in projects.items()}
+        self.discovery_policy = discovery_policy
         with self.transaction(write=True) as con:
             for repo, config in projects.items():
                 con.execute("INSERT OR IGNORE INTO twin_projects(repo) VALUES(?)", (repo,))
@@ -234,8 +235,50 @@ class Twin:
                     if hidden.rowcount:
                         revise(con, True)
 
-    def hide(self, repo):
+    def project_configs(self, con):
+        projects = self.manual_projects.copy()
+        if self.discovery_policy:
+            for repo, owner, name, branch in con.execute("SELECT * FROM twin_discovered ORDER BY repo"):
+                if len(projects) >= MAX_PROJECTS:
+                    break
+                if repo not in projects and discovery.matches(self.discovery_policy, repo, owner, name):
+                    projects[repo] = {"id": opaque("project", repo), "repo": owner + "/" + name,
+                                      "name": name, "refs": (branch,), "publish": self.discovery_policy["publish"],
+                                      "automatic": True}
+        return projects
+
+    @property
+    def projects(self):
+        if self.discovery_policy is None:
+            return self.manual_projects
+        with self.transaction() as con:
+            return self.project_configs(con)
+
+    def register_discovered(self, candidates):
+        """Replace only automatic membership, preserving stored game history."""
+        if self.discovery_policy is None:
+            return 0
         with self.transaction(write=True) as con:
+            previous = {row[0] for row in con.execute("SELECT repo FROM twin_discovered")}
+            eligible = {repo for repo, (owner, name, _) in candidates.items()
+                        if discovery.matches(self.discovery_policy, repo, owner, name)} - self.manual_projects.keys()
+            chosen = (sorted(eligible & previous) + sorted(eligible - previous))[
+                :MAX_PROJECTS - len(self.manual_projects)]
+            removed = previous - set(chosen) - self.manual_projects.keys()
+            for repo in removed:
+                con.execute("UPDATE twin_projects SET public_verified=0 WHERE repo=?", (repo,))
+            con.execute("DELETE FROM twin_discovered")
+            con.executemany("INSERT INTO twin_discovered VALUES(?,?,?,?)",
+                            ((repo, *candidates[repo]) for repo in chosen))
+            con.executemany("INSERT OR IGNORE INTO twin_projects(repo) VALUES(?)", ((repo,) for repo in chosen))
+            if previous != set(chosen):
+                revise(con, self.discovery_policy["publish"])
+            return len(chosen)
+
+    def hide(self, repo, remove_discovered=False):
+        with self.transaction(write=True) as con:
+            if remove_discovered:
+                con.execute("DELETE FROM twin_discovered WHERE repo=?", (repo,))
             result = con.execute("UPDATE twin_projects SET public_verified=0 WHERE repo=? AND public_verified=1",
                                  (repo,))
             if result.rowcount:
@@ -251,9 +294,10 @@ class Twin:
                     prune(con)
 
     def project_repo(self, project_id):
-        if not isinstance(project_id, str) or project_id not in self.by_id:
-            raise ValueError("unknown project")
-        return self.by_id[project_id]
+        for repo, item in self.projects.items():
+            if item["id"] == project_id:
+                return repo
+        raise ValueError("unknown project")
 
     def record_collection_failure(self, repo, detail, now):
         with self.transaction(write=True) as con:
@@ -267,11 +311,13 @@ class Twin:
         day = 86400
         offset = 9 * 3600
         day_start = int((now + offset) // day) * day - offset
-        totals = {"repositories": len(self.projects), "branches": 0, "collectedToday": 0,
+        totals = {"repositories": 0, "branches": 0, "collectedToday": 0,
                   "awardedToday": 0, "excludedToday": {"baseline": 0, "before_baseline": 0, "merge": 0}}
         with self.transaction() as con:
             rows = []
-            for repo, config in self.projects.items():
+            projects = self.project_configs(con)
+            totals["repositories"] = len(projects)
+            for repo, config in projects.items():
                 row = con.execute("SELECT * FROM twin_projects WHERE repo=?", (repo,)).fetchone()
                 refs = [ref[0] for ref in con.execute("SELECT ref FROM twin_refs WHERE repo=? ORDER BY ref", (repo,))]
                 outcomes = dict(con.execute("""
@@ -293,8 +339,8 @@ class Twin:
                              "lastAttemptAt": last["attempted_at"] if last else None,
                              "lastError": last["error"] if last else None,
                              "duplicatesLastSuccess": last["duplicates"] if last else 0})
-        agents = [{"id": scope.agent_id, "projectIds": [self.projects[r]["id"] for r in scope.repositories
-                                                       if r in self.projects]}
+        agents = [{"id": scope.agent_id, "projectIds": [projects[r]["id"] for r in scope.repositories
+                                                       if r in projects]}
                   for scope in self.tokens.values()]
         return {"projects": rows, "agents": agents, "collectorConfigured": bool(rows), "collection": totals}
 
@@ -328,14 +374,15 @@ class Twin:
 
     def ingest_agent(self, payload, scope, now=None):
         now = time.time() if now is None else now
-        if type(payload.get("repository_id")) is not int or payload["repository_id"] not in self.projects:
-            raise PermissionError("repository is outside the registry")
+        repo = payload.get("repository_id")
         with self.transaction(write=True) as con:
+            projects = self.project_configs(con)
+            if type(repo) is not int or repo not in projects:
+                raise PermissionError("repository is outside the registry")
             result = telemetry.ingest(con, payload, scope, now)
-            repo = payload["repository_id"]
             if result["updated"]:
                 public = con.execute("SELECT public_verified FROM twin_projects WHERE repo=?", (repo,)).fetchone()[0]
-                revise(con, public and self.projects[repo]["publish"])
+                revise(con, public and projects[repo]["publish"])
             if result["changed"]:
                 emit(con, repo, now, "agent", agent=scope.agent_id)
             return {key: result[key] for key in ("accepted", "duplicate")}
@@ -348,7 +395,7 @@ class Twin:
         projects = []
         visible = {}
         freshness = []
-        for repo, config in self.projects.items():
+        for repo, config in self.project_configs(con).items():
             row = con.execute("SELECT * FROM twin_projects WHERE repo=?", (repo,)).fetchone()
             if public and not (config["publish"] and row["public_verified"]):
                 continue

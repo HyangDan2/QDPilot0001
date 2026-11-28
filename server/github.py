@@ -10,12 +10,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from . import twin
+from . import discovery, twin
 
 HOST = "https://api.github.com"
 PAGE_SIZE = 100
 MAX_PAGES = 8
 MAX_REQUESTS = 240
+RATE_RESERVE = 250
 REQUEST_WINDOW = 90
 MAX_RESPONSE = 8 * 1024 * 1024
 DELIVERY_TTL = 30 * 86400
@@ -111,17 +112,21 @@ def retry_time(headers, now):
 
 
 class GitHub:
-    def __init__(self, token, opener=None):
+    def __init__(self, token, opener=None, quota=None):
         if not token:
             raise ValueError("a scoped GitHub read token is required")
         self.token = token
         self.opener = opener or build_opener(NoRedirect())
         self.requests = 0
+        self.quota = quota if quota is not None else {}
         self.deadline = time.monotonic() + REQUEST_WINDOW
 
     def get(self, path, params=None):
-        if not path.startswith("/repos/"):
+        if path != "/user/repos" and not path.startswith("/repos/"):
             raise CollectionError("invalid GitHub request path")
+        now = time.time()
+        if self.quota.get("retry_at", 0) > now:
+            raise Deferred(self.quota["retry_at"])
         self.requests += 1
         if self.requests > MAX_REQUESTS:
             raise CollectionError("GitHub request budget exceeded")
@@ -134,14 +139,31 @@ class GitHub:
                           "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "HD2Lab-Idle-Ops"})
         try:
             with self.opener.open(request, timeout=min(10, until)) as response:
+                remaining = response.headers.get("X-RateLimit-Remaining", "")
+                reset = response.headers.get("X-RateLimit-Reset", "")
+                if remaining.isdigit() and int(remaining) <= RATE_RESERVE and reset.isdigit():
+                    self.quota["retry_at"] = max(now + 1, int(reset) + 1)
+                    raise Deferred(self.quota["retry_at"])
                 raw = response.read(MAX_RESPONSE + 1)
                 if len(raw) > MAX_RESPONSE:
                     raise CollectionError("GitHub response exceeded the size limit")
                 return json.loads(raw), 'rel="next"' in response.headers.get("Link", "")
         except HTTPError as exc:
-            exc.close()
-            if exc.code == 429 or exc.code == 403:
-                raise Deferred(retry_time(exc.headers, time.time())) from None
+            rate_limited = exc.code == 429 or (
+                exc.code == 403 and (exc.headers.get("X-RateLimit-Remaining") == "0"
+                                     or bool(exc.headers.get("Retry-After")))
+            )
+            try:
+                if exc.code == 403 and not rate_limited:
+                    error = json.loads(exc.read(4096))
+                    rate_limited = isinstance(error, dict) and "rate limit" in str(error.get("message", "")).lower()
+            except (ValueError, OSError):
+                pass
+            finally:
+                exc.close()
+            if rate_limited:
+                self.quota["retry_at"] = retry_time(exc.headers, time.time())
+                raise Deferred(self.quota["retry_at"]) from None
             if exc.code == 404 and "/compare/" in path:
                 raise ComparisonUnavailable("GitHub comparison base unavailable") from None
             if exc.code == 404 and path.count("/") == 3:
@@ -343,6 +365,11 @@ def collect(twin_store, repo, client, now=None, recover=False, window=(None, Non
         meta, _ = client.get(path)
         if meta.get("id") != repo or type(meta.get("private")) is not bool:
             raise RepositoryUnavailable("GitHub repository identity did not match the registry")
+        automatic = config.get("automatic", False)
+        if automatic and (not discovery.public_repository(meta) or not discovery.matches(
+            twin_store.discovery_policy, repo, meta["owner"]["login"], meta["name"]
+        )):
+            raise RepositoryUnavailable("automatic repository no longer meets public approval policy")
         public = not meta["private"] and meta.get("visibility") == "public" and config["publish"]
         # Hide immediately after verified privacy changes, even when a later
         # ancillary GitHub request fails or hits a page cap.
@@ -393,14 +420,18 @@ def collect(twin_store, repo, client, now=None, recover=False, window=(None, Non
         final_meta, _ = client.get(path)
         if final_meta.get("id") != repo or final_meta.get("private") != meta["private"] or (
             final_meta.get("visibility") != meta.get("visibility")
-        ):
+        ) or (automatic and (
+            not discovery.public_repository(final_meta) or not discovery.matches(
+                twin_store.discovery_policy, repo, final_meta["owner"]["login"], final_meta["name"]
+            )
+        )):
             raise RepositoryUnavailable("repository visibility or identity changed during reconciliation")
     except Deferred as exc:
         with twin_store.transaction(write=True) as con:
             con.execute("UPDATE twin_projects SET retry_at=max(retry_at,?) WHERE repo=?", (exc.retry_at, repo))
         raise
     except RepositoryUnavailable:
-        twin_store.hide(repo)
+        twin_store.hide(repo, remove_discovered=config.get("automatic", False))
         raise
 
     with twin_store.transaction(write=True) as con:

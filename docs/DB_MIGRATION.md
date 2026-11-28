@@ -2,14 +2,14 @@
 
 ## R3 database migration and rollback
 
-R3.3.1 uses schema v7. Version 5 adds the GitHub repository/ref and commit ledgers, issue/CI
+R3.3.1 repository coverage uses schema v8. Version 5 adds the GitHub repository/ref and commit ledgers, issue/CI
 projections, event cursors, Reboot idempotency and agent telemetry tables.
 The original world, operation, event, player and audit records are preserved.
 Version 6 adds the current development observation without rewriting XP, the ledger,
 or issue history. Older issue records are classified only after a verified REST
 refresh. R3 starts each project at zero XP and stops settling the legacy economy through
 the application. Production was observed at schema version 0; v4 is the source
-branch baseline. Version 7 adds commit-collection diagnostics in independent tables. Older
+branch baseline. Versions 7 and 8 add commit diagnostics and automatic registry membership in independent tables. Older
 supported schemas migrate additively on service startup. A standalone
 pre-deploy backup preserves the original schema version.
 
@@ -47,6 +47,7 @@ section. Hard reset is absent from the R3 HTTP routes.
 | 5 | R3 GitHub Commit XP, 프로젝트·이슈·CI 투영, 이벤트, Reboot 및 에이전트 텔레메트리 |
 | 6 | 프로젝트별 개발 활동 시각, 현재 CI 상태 집계 |
 | 7 | 커밋 수집 시각·지급 판정, 수집 시도와 오류 |
+| 8 | 승인된 공개 저장소 자동 등록 및 인벤토리 조회 기록 |
 
 - 기동 시 `Store.__init__`이 `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE`(누락 컬럼)로
   멱등 마이그레이션을 수행하고 `user_version`을 올린다. 별도 마이그레이션 명령은 필요 없다.

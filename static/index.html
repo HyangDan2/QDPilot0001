@@ -63,6 +63,13 @@
           </div>
           <button type="button" class="button" id="refresh">상태 새로고침</button>
         </header>
+        <dl id="collection-metrics" class="metrics collection-metrics" hidden>
+          <div><dt>추적 저장소</dt><dd id="collection-repos"></dd></div>
+          <div><dt>추적 브랜치</dt><dd id="collection-branches"></dd></div>
+          <div><dt>오늘 수집 커밋 (KST)</dt><dd id="collection-today"></dd></div>
+          <div><dt>오늘 XP 지급 커밋</dt><dd id="collection-awarded"></dd></div>
+        </dl>
+        <p id="collection-exclusions" class="panel-empty" hidden></p>
         <p id="repo-empty" class="panel-empty">저장소 연결 상태를 확인하고 있습니다.</p>
         <ul id="repo-list" class="resource-list"></ul>
       </section>

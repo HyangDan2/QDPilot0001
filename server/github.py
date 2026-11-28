@@ -36,6 +36,10 @@ class Deferred(CollectionError):
         self.retry_at = retry_at
 
 
+class ComparisonUnavailable(CollectionError):
+    pass
+
+
 class RepositoryUnavailable(CollectionError):
     pass
 
@@ -69,8 +73,8 @@ def hook(twin_store, raw, event, delivery, signature, secret, now=None):
         con.execute("DELETE FROM twin_deliveries WHERE received<?", (now - DELIVERY_TTL,))
         inserted = con.execute("INSERT OR IGNORE INTO twin_deliveries VALUES(?,?,?)", (delivery, repo, now))
         if inserted.rowcount:
-            if event != "push" or payload.get("ref") in {"refs/heads/" + ref for ref in
-                                                         twin_store.projects[repo]["refs"]}:
+            ref = payload.get("ref")
+            if event != "push" or (isinstance(ref, str) and ref.startswith("refs/heads/")):
                 con.execute("UPDATE twin_projects SET requested=requested+1 WHERE repo=?", (repo,))
         return {"accepted": True, "duplicate": not bool(inserted.rowcount)}
 
@@ -138,6 +142,8 @@ class GitHub:
             exc.close()
             if exc.code == 429 or exc.code == 403:
                 raise Deferred(retry_time(exc.headers, time.time())) from None
+            if exc.code == 404 and "/compare/" in path:
+                raise ComparisonUnavailable("GitHub comparison base unavailable") from None
             if exc.code == 404 and path.count("/") == 3:
                 raise RepositoryUnavailable("registered repository unavailable") from None
             raise CollectionError(f"GitHub returned HTTP {exc.code}") from None
@@ -160,39 +166,74 @@ def repo_path(name):
     return "/repos/" + "/".join(quote(part, safe="") for part in name.split("/"))
 
 
-def branch_heads(client, path, refs):
+def branch_heads(client, path):
+    """Use complete paginated branch snapshots from the verified repository."""
     result = {}
-    for ref in refs:
-        payload, _ = client.get(path + "/git/ref/heads/" + quote(ref, safe="/"))
-        if payload.get("ref") != "refs/heads/" + ref:
-            raise CollectionError("GitHub returned a different tracked ref")
-        result[ref] = sha(payload.get("object", {}).get("sha"))
+    for item in client.pages(path + "/branches"):
+        ref = item.get("name")
+        if not isinstance(ref, str) or not ref or ref in result:
+            raise CollectionError("invalid or repeated GitHub branch; checkpoint preserved")
+        result[ref] = sha(item.get("commit", {}).get("sha"))
     return result
 
 
-def changed_commits(client, path, refs, previous, baseline):
-    commits = {}
+def commit_observation(commit, baseline):
+    identifier = sha(commit.get("sha"))
+    parents = commit.get("parents")
+    if not isinstance(parents, list):
+        raise CollectionError("GitHub response is missing commit parents")
+    authored = stamp(commit.get("commit", {}).get("committer", {}).get("date"))
+    if authored <= baseline:
+        return identifier, ("before_baseline", authored)
+    return identifier, ("merge" if len(parents) > 1 else "awarded", authored)
+
+
+def changed_commits(client, path, refs, previous, baseline, recover=False, window=(None, None)):
+    observations = {}
+    compared = set()
+    scanned = set()
+    # Round down so commits in the baseline second are checked locally too.
+    lower, upper = window
+    if upper is not None and upper <= baseline:
+        return observations
+    since = datetime.fromtimestamp(int(max(baseline, lower or baseline)), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def scan_tip(head):
+        if head in scanned:
+            return
+        params = {"sha": head, "since": since}
+        if upper is not None:
+            params["until"] = datetime.fromtimestamp(upper, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for item in client.pages(path + "/commits", params=params):
+            identifier, observation = commit_observation(item, baseline)
+            at = observation[1]
+            if (lower is None or at >= lower) and (upper is None or at <= upper):
+                observations[identifier] = observation
+        scanned.add(head)
+
     for ref, head in refs.items():
         old = previous.get(ref)
-        if not old or old == head:
+        if recover or not old:
+            scan_tip(head)
             continue
-        seen_head = False
-        for commit in client.pages(path + f"/compare/{old}...{head}", key="commits"):
-            identifier = sha(commit.get("sha"))
-            seen_head = seen_head or identifier == head
-            parents = commit.get("parents")
-            if not isinstance(parents, list):
-                raise CollectionError("GitHub response is missing commit parents")
-            authored = stamp(commit.get("commit", {}).get("committer", {}).get("date"))
-            # Old work newly cherry-picked has a new SHA and committer date.
-            # Old ancestry brought in by a later branch/merge does not pay.
-            commits[identifier] = len(parents) <= 1 and authored > baseline
-        if not seen_head:
-            # A rewind may legitimately have zero newly reachable commits.
-            verdict, _ = client.get(path + f"/compare/{old}...{head}", {"per_page": 1, "page": 1})
-            if verdict.get("status") not in ("behind", "identical"):
-                raise CollectionError("GitHub commit comparison was incomplete")
-    return commits
+        if old == head or (old, head) in compared:
+            continue
+        compared.add((old, head))
+        compare = path + f"/compare/{old}...{head}"
+        try:
+            observed = dict(commit_observation(item, baseline)
+                            for item in client.pages(compare, key="commits"))
+            if head not in observed:
+                verdict, _ = client.get(compare, {"per_page": 1, "page": 1})
+                if verdict.get("status") not in ("behind", "identical"):
+                    raise CollectionError("GitHub commit comparison was incomplete")
+        except ComparisonUnavailable:
+            # A deleted or force-replaced comparison base can disappear from
+            # GitHub. A bounded walk from the immutable current tip can recover.
+            scan_tip(head)
+        else:
+            observations.update(observed)
+    return observations
 
 
 def issue_kind(labels):
@@ -286,7 +327,7 @@ def ci_items(client, path, refs):
                            ci_stamp(job, state), job["id"])
 
 
-def collect(twin_store, repo, client, now=None):
+def collect(twin_store, repo, client, now=None, recover=False, window=(None, None)):
     """Fetch outside the transaction, then commit the entire observation atomically."""
     now = time.time() if now is None else now
     config = twin_store.projects[repo]
@@ -307,22 +348,36 @@ def collect(twin_store, repo, client, now=None):
         # ancillary GitHub request fails or hits a page cap.
         if not public and prior["public_verified"]:
             twin_store.hide(repo)
-        refs = branch_heads(client, path, config["refs"])
+        refs = branch_heads(client, path)
         baseline = prior["baseline_at"]
-        commits = changed_commits(client, path, refs, previous, baseline) if baseline is not None else {}
+        if recover and baseline is None:
+            raise CollectionError("initialize the repository baseline before recovery")
+        commits = changed_commits(client, path, refs, previous, baseline, recover, window) if baseline is not None else {}
+        # Branch discovery covers repository-wide commit progress. Keep CI
+        # observation within the original configured ref budget.
+        ci_refs = {ref: refs[ref] for ref in config["refs"] if ref in refs}
+        if not ci_refs and refs:
+            ref = meta.get("default_branch")
+            ref = ref if ref in refs else min(refs)
+            ci_refs = {ref: refs[ref]}
         commit_at = activity["commit_at"] if activity else None
         if activity is None or refs != previous:
             dates = []
-            for tip in set(refs.values()):
+            for tip in set(ci_refs.values()):
                 commit, _ = client.get(path + "/git/commits/" + tip)
                 if commit.get("sha") != tip:
                     raise CollectionError("GitHub returned a different tracked commit")
                 dates.append(stamp(commit.get("committer", {}).get("date")))
-            commit_at = max(dates)
+            commit_at = max(dates, default=None)
+
+        commit_dates = [value[1] for value in commits.values()]
+        commit_dates.extend(value for value in (commit_at, activity["commit_at"] if activity else None)
+                            if value is not None)
+        commit_at = max(commit_dates, default=None)
 
         issues = list(issue_items(client, path, prior["observed_at"] if activity else None, now))
         ci = {}
-        for observation in ci_items(client, path, refs):
+        for observation in ci_items(client, path, ci_refs):
             key = observation[0]
             if key not in ci or observation[3:] >= ci[key][3:]:
                 ci[key] = observation
@@ -333,7 +388,7 @@ def collect(twin_store, repo, client, now=None):
                     for item in client.pages(path + "/releases")
                     if not item.get("draft") and item.get("published_at")]
         # Ref updates during a collection invalidate the assembled observation.
-        if refs != branch_heads(client, path, config["refs"]):
+        if refs != branch_heads(client, path):
             raise CollectionError("tracked refs changed during reconciliation; retry")
         final_meta, _ = client.get(path)
         if final_meta.get("id") != repo or final_meta.get("private") != meta["private"] or (
@@ -357,34 +412,46 @@ def collect(twin_store, repo, client, now=None):
         earned = 0
         count = 0
         points = twin.XP_PER_COMMIT * twin.bonus(current["reboots"]) // 10000
-        for identifier, eligible in commits.items():
-            if con.execute("INSERT OR IGNORE INTO twin_commits VALUES(?,?,?)",
-                           (repo, identifier, points if eligible else 0)).rowcount:
-                count += 1
-                if eligible:
-                    xp += points
-                    earned += 1
+        duplicates = 0
         if baseline is None:
             baseline = now
-        # A seeded branch tip is already known repository history, including
-        # when it is later pushed onto another branch with a future commit date.
-        con.executemany("INSERT OR IGNORE INTO twin_commits VALUES(?,?,0)",
-                        ((repo, head) for ref, head in refs.items() if ref not in previous))
+            commits = dict.fromkeys(refs.values(), ("baseline", None))
+        for identifier, (reason, _) in commits.items():
+            awarded = reason == "awarded"
+            if not con.execute("INSERT OR IGNORE INTO twin_commits VALUES(?,?,?)",
+                               (repo, identifier, points if awarded else 0)).rowcount:
+                duplicates += 1
+                continue
+            con.execute("INSERT INTO twin_commit_observations VALUES(?,?,?,?)",
+                        (repo, identifier, now, reason))
+            if reason != "baseline":
+                count += 1
+            if awarded:
+                xp += points
+                earned += 1
+        con.execute("""
+            INSERT INTO twin_collector VALUES(?,?,NULL,?)
+            ON CONFLICT(repo) DO UPDATE SET attempted_at=excluded.attempted_at,error=NULL,
+                duplicates=excluded.duplicates
+        """, (repo, now, duplicates))
         con.execute("""
             UPDATE twin_projects SET baseline_at=?, observed_at=?, xp=xp+?,run_commits=run_commits+?,
-              commit_count=commit_count+?,served=?,retry_at=0
+              commit_count=commit_count+?,served=?,retry_at=0,
+              requested=CASE WHEN ? THEN max(requested,served+1) ELSE requested END
             WHERE repo=?
-        """, (baseline, now, xp, earned, count, prior["requested"], repo))
-        con.execute("DELETE FROM twin_refs WHERE repo=?", (repo,))
-        con.executemany("INSERT INTO twin_refs VALUES(?,?,?)", ((repo, ref, value) for ref, value in refs.items()))
+        """, (baseline, now, xp, earned, count, prior["served"] if recover else prior["requested"],
+              recover, repo))
+        if not recover:
+            con.execute("DELETE FROM twin_refs WHERE repo=?", (repo,))
+            con.executemany("INSERT INTO twin_refs VALUES(?,?,?)", ((repo, ref, value) for ref, value in refs.items()))
         for item in issues + ci_signals + releases:
             twin.signal(con, repo, item, now, activity is not None)
-        observed_activity = [(commit_at, "commit")]
+        observed_activity = [(commit_at, "commit")] if commit_at is not None else []
         observed_activity.extend((item[3], "issue" if item[1] in twin.BUG_CLASSES else item[1])
                                  for item in issues + list(ci.values()) + releases)
         if activity and activity["activity_at"] is not None:
             observed_activity.insert(0, (activity["activity_at"], activity["activity_kind"]))
-        activity_at, activity_kind = max(observed_activity, key=lambda item: item[0])
+        activity_at, activity_kind = max(observed_activity, key=lambda item: item[0], default=(None, None))
         con.execute("""
             INSERT INTO twin_development VALUES(?,?,?,?,?,?,?)
             ON CONFLICT(repo) DO UPDATE SET commit_at=excluded.commit_at,

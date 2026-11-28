@@ -41,6 +41,8 @@ class Source:
         self.repo = repo
         self.head = MAIN
         self.commits = []
+        self.extra_refs = {}
+        self.histories = {}
         self.issues = []
         self.checks = []
         self.workflows = []
@@ -67,6 +69,11 @@ class Source:
             return iter(self.commits)
         if self.error:
             raise self.error
+        if path.endswith("/branches"):
+            refs = {"main": self.head, "feature/release": OTHER, **self.extra_refs}
+            return ({"name": name, "commit": {"sha": tip}} for name, tip in refs.items())
+        if path.endswith("/commits"):
+            return iter(self.histories.get(params["sha"], ()))
         if path.endswith("/issues"):
             return iter(self.issues)
         if path.endswith("/check-runs"):
@@ -141,6 +148,102 @@ class TwinTest(unittest.TestCase):
         with self.assertRaises(github.Deferred):
             github.collect(self.service, 1, self.source, NOW + 99)
         self.assertEqual(github.collect(self.service, 1, self.source, NOW + 101)["xp"], 0)
+
+    def test_discovery_awards_unseen_branch_history_and_survives_deletion(self):
+        github.collect(self.service, 1, self.source, NOW)
+        fresh_tip = "a" * 40
+        fresh_parent = "b" * 40
+        self.source.extra_refs["work/new"] = fresh_tip
+        self.source.histories[fresh_tip] = [
+            make_commit(MAIN, NOW - 1),
+            make_commit("c" * 40, NOW - 2),
+            make_commit(fresh_parent, NOW + 1),
+            make_commit(fresh_tip, NOW + 2),
+        ]
+        outcome = github.collect(self.service, 1, self.source, NOW + 3)
+        self.assertEqual(outcome, {"commits": 3, "eligible": 2, "xp": 20})
+        metrics = self.service.integrations(now=NOW + 3)
+        self.assertIn("work/new", metrics["projects"][0]["trackedRefs"])
+        self.assertEqual(metrics["collection"]["awardedToday"], 2)
+        self.assertEqual(metrics["collection"]["excludedToday"]["before_baseline"], 1)
+        self.assertEqual(metrics["projects"][0]["duplicatesLastSuccess"], 1)
+        self.assertNotIn("trackedRefs", json.dumps(self.service.snapshot(public=True)))
+        self.assertNotIn("work/new", json.dumps(self.service.snapshot(public=True)))
+
+        # The branch is merged into main and removed; only the merge itself is new.
+        self.source.extra_refs.clear()
+        self.source.head = "d" * 40
+        self.source.commits = [
+            make_commit(fresh_parent, NOW + 1), make_commit(fresh_tip, NOW + 2),
+            make_commit(self.source.head, NOW + 4, parents=2),
+        ]
+        self.assertEqual(github.collect(self.service, 1, self.source, NOW + 5), {
+            "commits": 1, "eligible": 0, "xp": 0,
+        })
+        metrics = self.service.integrations(now=NOW + 5)
+        self.assertNotIn("work/new", metrics["projects"][0]["trackedRefs"])
+        self.assertEqual(metrics["collection"]["excludedToday"]["merge"], 1)
+        self.assertEqual(self.row()["xp"], 20)
+
+    def test_recovery_window_keeps_checkpoints_and_never_replays_awards(self):
+        github.collect(self.service, 1, self.source, NOW)
+        with self.service.transaction(write=True) as con:
+            con.execute("UPDATE twin_projects SET xp=250,run_commits=8,reboots=2 WHERE repo=1")
+            con.execute("INSERT INTO twin_commits VALUES(1,?,10)", ("a" * 40,))
+        self.source.extra_refs["work/backfill"] = "c" * 40
+        self.source.histories["c" * 40] = [
+            make_commit("f" * 40, NOW - 1), make_commit("a" * 40, NOW + 1),
+            make_commit("b" * 40, NOW + 2), make_commit("c" * 40, NOW + 3),
+        ]
+        window = (NOW - 2, NOW + 2)
+        first = github.collect(self.service, 1, self.source, NOW + 4, recover=True, window=window)
+        self.assertEqual(first, {"commits": 2, "eligible": 1, "xp": 12})
+        self.assertNotIn("work/backfill", self.service.integrations()["projects"][0]["trackedRefs"])
+        self.assertGreater(self.row()["requested"], self.row()["served"])
+        second = github.collect(self.service, 1, self.source, NOW + 5, recover=True, window=window)
+        self.assertEqual(second["xp"], 0)
+        self.assertEqual((self.row()["xp"], self.row()["reboots"], self.row()["run_commits"]), (262, 2, 9))
+        third = github.collect(self.service, 1, self.source, NOW + 6)
+        self.assertEqual(third["xp"], 12)
+        self.assertEqual(self.row()["xp"], 274)
+        self.assertEqual(self.service.integrations(now=NOW + 86400)["collection"]["collectedToday"], 0)
+
+    def test_discovery_page_failure_preserves_checkpoint(self):
+        github.collect(self.service, 1, self.source, NOW)
+        before = self.service.integrations()["projects"][0]["trackedRefs"]
+        pages = self.source.pages
+
+        def failing_pages(path, **kwargs):
+            if path.endswith("/branches"):
+                yield {"name": "main", "commit": {"sha": "a" * 40}}
+                raise github.CollectionError("GitHub pagination limit exceeded; checkpoint preserved")
+            yield from pages(path, **kwargs)
+
+        self.source.pages = failing_pages
+        with self.assertRaisesRegex(github.CollectionError, "checkpoint preserved"):
+            github.collect(self.service, 1, self.source, NOW + 1)
+        self.service.record_collection_failure(1, "GitHub pagination limit exceeded", NOW + 1)
+        entry = self.service.integrations(now=NOW + 1)["projects"][0]
+        self.assertEqual(entry["trackedRefs"], before)
+        self.assertEqual(entry["lastError"], "GitHub pagination limit exceeded")
+        self.assertEqual(entry["lastAttemptAt"], NOW + 1)
+        self.assertEqual(self.row()["observed_at"], NOW)
+        self.assertNotIn("lastError", self.service.snapshot(public=True))
+
+    def test_force_replacement_can_recover_when_the_compare_base_is_gone(self):
+        github.collect(self.service, 1, self.source, NOW)
+        self.source.head = "a" * 40
+        self.source.histories[self.source.head] = [make_commit(self.source.head, NOW + 1)]
+        pages = self.source.pages
+
+        def missing_compare(path, **kwargs):
+            if "/compare/" in path:
+                raise github.ComparisonUnavailable("comparison base unavailable")
+            yield from pages(path, **kwargs)
+
+        self.source.pages = missing_compare
+        self.assertEqual(github.collect(self.service, 1, self.source, NOW + 2)["xp"], 10)
+        self.assertEqual(github.collect(self.service, 1, self.source, NOW + 3)["xp"], 0)
 
     def test_issues_stale_close_dismiss_reopen_and_resolution(self):
         issue = {"id": 88, "title": "never-serialize", "labels": [{"name": "bug"}], "state": "open", "updated_at": iso(NOW)}
@@ -351,6 +454,9 @@ class TwinTest(unittest.TestCase):
         hook = "/internal/idle-ops/v1/github"
         auth = {"X-HD2Lab-User": "tester", "X-HD2Lab-Role": "admiral"}
         self.assertEqual(request("GET", admin + "/state")[0], 401)
+        self.assertEqual(request("GET", admin + "/integrations")[0], 401)
+        self.assertEqual(request("GET", admin + "/integrations", headers=auth)[1]["collection"]["repositories"], 2)
+        self.assertNotIn("collection", request("GET", public + "/state")[1])
         self.assertEqual(request("GET", admin + "/state", headers={"X-HD2Lab-User": "tester"})[0], 403)
         self.assertEqual(request("HEAD", public + "/state")[0], 200)
         self.assertEqual(request("POST", public + "/state", "{}")[0], 405)

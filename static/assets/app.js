@@ -115,20 +115,43 @@ function authRequired() {
 function updateRepoList() {
   const projects = registry.projects;
   $("collector-status").textContent = registry.collectorConfigured ? "GitHub 수집기 설정됨" : "GitHub 수집기 설정 대기";
+  const collection = registry.collection;
+  $("collection-metrics").hidden = !collection;
+  $("collection-exclusions").hidden = !collection;
+  if (collection) {
+    $("collection-repos").textContent = formatter.format(collection.repositories);
+    $("collection-branches").textContent = formatter.format(collection.branches);
+    $("collection-today").textContent = formatter.format(collection.collectedToday);
+    $("collection-awarded").textContent = formatter.format(collection.awardedToday);
+    const excluded = collection.excludedToday;
+    $("collection-exclusions").textContent = `오늘 XP 제외 · 초기 기준선 ${formatter.format(excluded.baseline)} · 기준선 이전 ${formatter.format(excluded.before_baseline)} · 병합 ${formatter.format(excluded.merge)}`;
+  }
   const empty = $("repo-empty");
   empty.textContent = "아직 등록된 저장소가 없습니다. 연동 설정 안내에서 등록 절차를 확인할 수 있습니다.";
   empty.hidden = projects.length > 0;
   $("repo-list").replaceChildren(...projects.map((project) => {
     const item = node("li");
     const copy = node("div");
-    const refs = project.trackedRefs?.length ? project.trackedRefs.join(", ") : "등록된 ref 없음";
+    const refs = project.trackedRefs ?? [];
+    const refSummary = refs.length ? `추적 브랜치 ${refs.length}개` : "관측된 브랜치 없음";
     const delayed = project.stale || !project.observedAt;
     const freshness = delayed && project.observedAt ? `관측 지연 · ${age(project.observedAt)}` : age(project.observedAt);
     copy.append(
       node("h3", project.name),
-      node("p", `${project.public ? "공개 관전 허용" : "관리자 전용"} · ${refs}`),
-      node("p", `${project.repository} · ${freshness}`, delayed ? "is-stale" : ""),
+      node("p", `${project.public ? "공개 관전 허용" : "관리자 전용"} · ${refSummary}`),
+      node("p", `${project.repository} · 최근 동기화 ${freshness}`, delayed ? "is-stale" : ""),
     );
+    if (refs.length) {
+      const list = node("details");
+      list.append(node("summary", "브랜치 보기"), node("p", refs.join(", ")));
+      copy.append(list);
+    }
+    if (project.lastError) {
+      copy.append(node("p", `수집 오류 (${age(project.lastAttemptAt)}) · ${project.lastError}`, "is-stale"));
+    }
+    if (project.duplicatesLastSuccess) {
+      copy.append(node("p", `최근 동기화에서 중복 제외 ${formatter.format(project.duplicatesLastSuccess)}건`));
+    }
     const backoff = project.retryAt > Date.now() / 1000;
     if (backoff) {
       const retry = new Date(project.retryAt * 1000).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });

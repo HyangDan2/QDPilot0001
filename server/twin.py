@@ -75,6 +75,21 @@ DEVELOPMENT_TABLES = {
                          "ci_running", "ci_passed", "ci_failed"},
 }
 
+COLLECTOR_SCHEMA = """
+CREATE TABLE IF NOT EXISTS twin_commit_observations (
+    repo INTEGER NOT NULL, sha TEXT NOT NULL, collected_at REAL NOT NULL, reason TEXT NOT NULL,
+    PRIMARY KEY(repo, sha)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS twin_observations_day ON twin_commit_observations(repo, collected_at);
+CREATE TABLE IF NOT EXISTS twin_collector (
+    repo INTEGER PRIMARY KEY, attempted_at REAL NOT NULL, error TEXT, duplicates INTEGER NOT NULL
+);
+"""
+COLLECTOR_TABLES = {
+    "twin_commit_observations": {"repo", "sha", "collected_at", "reason"},
+    "twin_collector": {"repo", "attempted_at", "error", "duplicates"},
+}
+
 REQUIRED_TABLES = {
     **telemetry.REQUIRED_TABLES,
     "twin_clock": {"id", "revision", "public_revision", "public_cursor", "alias_key"},
@@ -240,22 +255,48 @@ class Twin:
             raise ValueError("unknown project")
         return self.by_id[project_id]
 
-    def integrations(self):
+    def record_collection_failure(self, repo, detail, now):
+        with self.transaction(write=True) as con:
+            con.execute("""
+                INSERT INTO twin_collector VALUES(?,?,?,0)
+                ON CONFLICT(repo) DO UPDATE SET attempted_at=excluded.attempted_at,error=excluded.error
+            """, (repo, now, detail))
+
+    def integrations(self, now=None):
+        now = time.time() if now is None else now
+        day = 86400
+        offset = 9 * 3600
+        day_start = int((now + offset) // day) * day - offset
+        totals = {"repositories": len(self.projects), "branches": 0, "collectedToday": 0,
+                  "awardedToday": 0, "excludedToday": {"baseline": 0, "before_baseline": 0, "merge": 0}}
         with self.transaction() as con:
             rows = []
-            now = time.time()
             for repo, config in self.projects.items():
                 row = con.execute("SELECT * FROM twin_projects WHERE repo=?", (repo,)).fetchone()
+                refs = [ref[0] for ref in con.execute("SELECT ref FROM twin_refs WHERE repo=? ORDER BY ref", (repo,))]
+                outcomes = dict(con.execute("""
+                    SELECT reason,count(*) FROM twin_commit_observations
+                    WHERE repo=? AND collected_at>=? AND collected_at<? GROUP BY reason
+                """, (repo, day_start, day_start + day)))
+                last = con.execute("SELECT * FROM twin_collector WHERE repo=?", (repo,)).fetchone()
+                totals["branches"] += len(refs)
+                totals["collectedToday"] += sum(outcomes.values())
+                totals["awardedToday"] += outcomes.get("awarded", 0)
+                for reason in totals["excludedToday"]:
+                    totals["excludedToday"][reason] += outcomes.get(reason, 0)
                 rows.append({"id": config["id"], "name": config["name"], "repository": config["repo"],
                              "public": bool(config["publish"] and row["public_verified"]),
-                             "trackedRefs": config["refs"], "observedAt": row["observed_at"],
+                             "trackedRefs": refs, "observedAt": row["observed_at"],
                              "stale": not row["observed_at"] or now - row["observed_at"] > STALE_SECONDS,
                              "pending": row["requested"] > row["served"],
-                             "retryAt": row["retry_at"] or None})
+                             "retryAt": row["retry_at"] or None,
+                             "lastAttemptAt": last["attempted_at"] if last else None,
+                             "lastError": last["error"] if last else None,
+                             "duplicatesLastSuccess": last["duplicates"] if last else 0})
         agents = [{"id": scope.agent_id, "projectIds": [self.projects[r]["id"] for r in scope.repositories
                                                        if r in self.projects]}
                   for scope in self.tokens.values()]
-        return {"projects": rows, "agents": agents, "collectorConfigured": bool(rows)}
+        return {"projects": rows, "agents": agents, "collectorConfigured": bool(rows), "collection": totals}
 
     def enqueue(self, project_id):
         repo = self.project_repo(project_id)

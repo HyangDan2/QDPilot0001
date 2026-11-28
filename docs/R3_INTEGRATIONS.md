@@ -26,7 +26,8 @@ with fictional IDs and a public display name approved for that project:
 }
 ```
 
-The allowlist uses stable numeric GitHub repository IDs and explicit branches.
+The allowlist uses stable numeric GitHub repository IDs. Configured branches
+scope CI; the Collector discovers commit branches inside the approved repository.
 A rename or path mismatch needs operator review. Verify the ID and permissions
 before indexing. GitHub confirms identity and visibility at each collection.
 Publication defaults to false and personal, internal and private repositories
@@ -49,11 +50,12 @@ IDLE_OPS_CONFIG=/etc/hd2lab/idle-ops-r3.json python3 -m server.reconcile \
 
 The first successful observation per project stores branch tips, open issues,
 recently observed pull requests, current CI and published releases with zero XP.
-Adding a tracked branch seeds its first tip without back pay. Later observations
-compare immutable SHAs, deduplicate repository/SHA pairs and atomically commit
-before advancing tips. Merge commits and commits whose GitHub committer date is
+New branches in an existing project are scanned from the verified repository
+baseline. Later observations compare immutable SHAs, deduplicate repository/SHA
+pairs and atomically commit before advancing tips. See [R3.3.1 collection and
+recovery](R3_3_1_COLLECTION.md). Merge commits and commits whose GitHub committer date is
 at or before the project baseline are observed without XP. Branch rewinds do
-not make an existing SHA eligible again. The dashboard shows the latest tracked-tip commit date, last development
+not make an existing SHA eligible again. The dashboard shows the latest observed commit date, last development
 activity and the latest observation time. The collector uses GitHub source
 timestamps. It seeds all open issues/PRs and changes from the last 30 days,
 then polls updates incrementally. PR merged counts accumulate only verified
@@ -92,7 +94,7 @@ work and cannot award XP or resolve any issue.
 
 ## Capacity and failure behavior
 
-- Registry maximum 40 repositories, 8 branches each. REST allows 8 pages of 100
+- Registry maximum 40 repositories, with up to 8 configured CI branches each. REST allows 8 pages of 100
   items per listing, 240 requests and a 90-second request window per repo.
   The worker walks due repositories for up to 4 minutes before starting the
   final in-flight observation. Configure the timer for a one-minute queue check,
